@@ -314,6 +314,15 @@ call = "JetpackTurnStick"
 at = 0x127E40
 call = "JetpackTurn"
 
+# gun turret: the mouse joins the smoothed stick, then the smoothing goes on from the stick alone
+[[hook]]
+at = 0x12E781
+call = "TurretAim"
+
+[[hook]]
+at = 0x12E81F
+call = "TurretAimDone"
+
 # end of the frame render, after the HUD and before the frame is shown: the frame rate is drawn with the game text
 [[hook]]
 at = 0x34D094

@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 
 #include "common/mouse_keyboard.h"
@@ -20,9 +22,10 @@ constexpr uint32_t kPlayerPort = 0xB24;  // in the player, the controller that d
 constexpr float kDegreesPerCount = 0.04f;  // at sensitivity 1
 constexpr float kRadiansPerDegree = 0.017453292f;
 constexpr float kRadiansPerCount = kDegreesPerCount * kRadiansPerDegree;
+constexpr float kMinSeconds = 1.0f / 240.0f;
 
 // views that turn with the mouse, each takes its own share of the motion
-enum class View { Chase, Jetpack, Count };
+enum class View { Chase, Jetpack, Turret, Count };
 
 struct Share {
     input::MouseMove move{};
@@ -77,6 +80,33 @@ constexpr uint32_t kJetpackTurnStep = 0;  // from esp, pushed for the player's t
 constexpr uint32_t kLowByte = 0xFF;
 constexpr uint32_t kRightStickTurns = 1;  // cl: the right stick turns, the left only strafes
 
+// Gun turret update, esi the player's use of the turret; an input drives the turret at its top speed times the input.
+
+constexpr uint32_t kTurretPlayer = 0x4C;
+constexpr uint32_t kTurretYawSpeed = 0x68;  // radians a second
+constexpr uint32_t kTurretPitchSpeed = 0x6C;
+constexpr uint32_t kTurretYawInput = 0x74;  // the smoothed stick
+constexpr uint32_t kTurretPitchInput = 0x70;
+constexpr uint32_t kTurretSeconds = 0x24;  // from esp
+constexpr int kTurretYawReg = 0;  // xmm, the inputs before they are stored
+constexpr int kTurretPitchReg = 2;
+
+struct TurretStick {
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+};
+TurretStick g_turret_stick;  // the smoothed stick alone, put back once the turret turned
+
+// past a full input the game raises the speed by the input too, so a turn of stick times that plus the mouse
+// goes back in as its root
+float TurretInput(float stick, float turn, float speed, float seconds) {
+    if (speed <= 0.0f) return stick;
+    float stick_turn = stick * std::max(1.0f, std::fabs(stick));
+    float target = stick_turn + turn / (speed * std::max(kMinSeconds, seconds));
+    if (std::fabs(target) <= 1.0f) return target;
+    return std::copysign(std::sqrt(std::fabs(target)), target);
+}
+
 }  // namespace
 
 // each chase camera update, before it turns
@@ -108,4 +138,21 @@ void JetpackTurnStick(X86Context& ctx, uint8_t*) {
 void JetpackTurn(X86Context& ctx, uint8_t*) {
     input::MouseMove move = TakeForPlayer(View::Jetpack, R32(ctx.ebx + kJetpackPlayer));
     G<float>(ctx.esp + kJetpackTurnStep) -= move.dx * kRadiansPerCount;
+}
+
+// the smoothed stick, before the turret takes it
+void TurretAim(X86Context& ctx, uint8_t*) {
+    float& yaw = ctx.xmm[kTurretYawReg].f[0];
+    float& pitch = ctx.xmm[kTurretPitchReg].f[0];
+    g_turret_stick = {yaw, pitch};
+    input::MouseMove move = TakeForPlayer(View::Turret, R32(ctx.esi + kTurretPlayer));
+    float seconds = G<float>(ctx.esp + kTurretSeconds);
+    yaw = TurretInput(yaw, -move.dx * kRadiansPerCount, G<float>(ctx.esi + kTurretYawSpeed), seconds);
+    pitch = TurretInput(pitch, -move.dy * kRadiansPerCount, G<float>(ctx.esi + kTurretPitchSpeed), seconds);
+}
+
+// the turret turned, its smoothing goes on from the stick alone
+void TurretAimDone(X86Context& ctx, uint8_t*) {
+    G<float>(ctx.esi + kTurretYawInput) = g_turret_stick.yaw;
+    G<float>(ctx.esi + kTurretPitchInput) = g_turret_stick.pitch;
 }
