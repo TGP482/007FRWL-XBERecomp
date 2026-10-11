@@ -21,6 +21,7 @@
 #include <windows.h>
 
 #include "app/app.h"
+#include "common/aspect.h"
 #include "common/menu.h"
 #include "common/options.h"
 
@@ -116,12 +117,14 @@ constexpr uint64_t kTapMs = 80;    // a wheel notch holds its dpad press this lo
 constexpr int kPadStickPress = 8000;  // a controller stick past this counts as a press
 constexpr uint8_t kPadAnalogPress = 30;  // a resting trigger may read a little above 0
 constexpr int kPadDigitalButtons = 8;   // Pad::buttons bits in use
+constexpr int kPorts = 4;
 constexpr USHORT kUsagePageGeneric = 1;
 constexpr USHORT kUsageMouse = 2;
 constexpr uint16_t kWheelUp = 1 << kDpadUp;
 constexpr uint16_t kWheelDown = 1 << kDpadDown;
 constexpr int kFirstVk = 1;
 constexpr int kEndVk = 255;
+constexpr uint32_t kAnalogShift = 16;    // a tap's analog buttons sit above its pad buttons
 
 struct Name {
     int vk;
@@ -159,12 +162,22 @@ std::atomic<bool> g_settle{false};
 std::atomic<int> g_dx{0};
 std::atomic<int> g_dy{0};
 std::atomic<uint64_t> g_take_ms{0};  // TakeMouse, asked every tick in play
-std::atomic<uint64_t> g_mouse_ms{0};  // the mouse last moved
-std::atomic<uint64_t> g_pad_ms{0};    // the controller last had a new press
-std::atomic<uint32_t> g_pad_held{0};
+std::array<std::atomic<uint32_t>, kPorts> g_pad_held{};  // by port, each polled on its own
 std::atomic<uint16_t> g_tap{0};
 std::atomic<uint64_t> g_tap_until{0};
 std::atomic<uint64_t> g_capture_ms{0};
+std::atomic<bool> g_menu{false};
+std::atomic<bool> g_keyboard{true};
+std::atomic<int> g_wheel{0};  // notches in the menus not yet pressed
+std::atomic<uint32_t> g_press{0};
+std::atomic<uint64_t> g_press_until{0};
+
+// a wheel notch in the menus, pressed on the dpad with a release before the next; pad thread only
+struct WheelStep {
+    uint16_t button = 0;
+    uint64_t until = 0;
+};
+WheelStep g_step;
 
 uint64_t NowMs() {
     auto since = std::chrono::steady_clock::now().time_since_epoch();
@@ -266,11 +279,17 @@ void Press(const Entry& entry, Pad& pad, StickKeys& sticks) {
     }
 }
 
-// the look keys act in play only, where the arrows are not the dpad
+bool AnyKeyDown(const std::vector<int>& keys) {
+    return std::any_of(keys.begin(), keys.end(), [](int vk) { return !IsMouseButton(vk) && Down(vk); });
+}
+
+// the look keys act in play only, where the arrows are not the dpad; in a menu the mouse buttons are the cursor's
 void PressBoundKeys(const Binds& binds, bool play, Pad& pad, StickKeys& sticks) {
+    bool cursor = !play && g_menu;
     for (size_t i = 0; i < kCount; i++) {
         bool blocked = kEntries[i].kind == Kind::Look && !play;
-        if (!blocked && AnyDown(binds[i])) Press(kEntries[i], pad, sticks);
+        bool down = cursor ? AnyKeyDown(binds[i]) : AnyDown(binds[i]);
+        if (!blocked && down) Press(kEntries[i], pad, sticks);
     }
 }
 
@@ -304,23 +323,6 @@ void SetSticks(Pad& pad, const StickKeys& sticks) {
     if (int y = Axis(sticks.look[kLookUp], sticks.look[kLookDown])) pad.ry = int16_t(y * kFullStick);
 }
 
-// only new presses count, so a drifting stick never takes over from the mouse
-void UpdatePadPress(const Pad& pad) {
-    uint32_t held = pad.buttons;
-    int bit = kPadDigitalButtons;
-    for (uint8_t analog : pad.analog) {
-        bool pressed = analog > kPadAnalogPress;
-        held |= uint32_t(pressed) << bit;
-        bit++;
-    }
-    for (int16_t axis : {pad.lx, pad.ly, pad.rx, pad.ry}) {
-        bool pressed = std::abs(int(axis)) > kPadStickPress;
-        held |= uint32_t(pressed) << bit;
-        bit++;
-    }
-    if (held & ~g_pad_held.exchange(held)) g_pad_ms = NowMs();
-}
-
 // the cursor stays inside the window while the mouse looks
 void ClipToWindow() {
     HWND hwnd = HWND(app::Window());
@@ -332,7 +334,6 @@ void ClipToWindow() {
 
 void AddMotion(const RAWMOUSE& mouse) {
     if (mouse.usFlags & MOUSE_MOVE_ABSOLUTE) return;
-    if (mouse.lLastX || mouse.lLastY) g_mouse_ms = NowMs();
     g_dx += mouse.lLastX;
     g_dy += mouse.lLastY;
 }
@@ -343,6 +344,67 @@ void AddWheel(const RAWMOUSE& mouse) {
     bool up = SHORT(mouse.usButtonData) > 0;
     g_tap = up ? kWheelUp : kWheelDown;
     g_tap_until = NowMs() + kTapMs;
+}
+
+// Windows asks for the cursor only when the mouse moves
+void RefreshCursor() {
+    HWND hwnd = HWND(app::Window());
+    if (hwnd) PostMessageW(hwnd, WM_SETCURSOR, WPARAM(hwnd), MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+}
+
+void SetKeyboard(bool on) {
+    if (g_keyboard.exchange(on) != on) RefreshCursor();
+}
+
+void AddMenuWheel(const RAWMOUSE& mouse) {
+    if (!(mouse.usButtonFlags & RI_MOUSE_WHEEL)) return;
+    g_wheel += SHORT(mouse.usButtonData) > 0 ? 1 : -1;
+}
+
+uint32_t TapBits(Tap tap) {
+    switch (tap) {
+        case Tap::Start:
+            return 1u << kStart;
+        case Tap::Back:
+            return 1u << kBack;
+        case Tap::Up:
+            return 1u << kDpadUp;
+        case Tap::Down:
+            return 1u << kDpadDown;
+        case Tap::Left:
+            return 1u << kDpadLeft;
+        case Tap::Right:
+            return 1u << kDpadRight;
+        case Tap::A:
+            return 1u << (kAnalogShift + kA);
+        case Tap::B:
+            return 1u << (kAnalogShift + kB);
+    }
+    return 0;
+}
+
+void PressTap(Pad& pad) {
+    if (NowMs() >= g_press_until) return;
+    uint32_t bits = g_press;
+    pad.buttons |= uint16_t(bits);
+    for (int i = kA; i <= kRightTrigger; i++) {
+        if (bits >> (kAnalogShift + i) & 1) pad.analog[i] = kFullPress;
+    }
+}
+
+void PressWheel(Pad& pad) {
+    uint64_t now = NowMs();
+    if (now < g_step.until) {
+        pad.buttons |= g_step.button;
+        return;
+    }
+    bool released = now >= g_step.until + kTapMs;
+    int notches = g_wheel;
+    if (!released || notches == 0) return;
+    int step = notches > 0 ? 1 : -1;
+    g_wheel -= step;
+    g_step = {step > 0 ? kWheelUp : kWheelDown, now + kTapMs};
+    pad.buttons |= g_step.button;
 }
 
 }  // namespace
@@ -357,9 +419,11 @@ void OnRawInput(void* handle) {
     UINT size = sizeof(raw);
     UINT read = GetRawInputData(static_cast<HRAWINPUT>(handle), RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER));
     if (read == UINT(-1) || raw.header.dwType != RIM_TYPEMOUSE || !Active()) return;
+    SetKeyboard(true);
     // the cursor is free outside play
     if (!Play()) {
         ClipCursor(nullptr);
+        AddMenuWheel(raw.data.mouse);
         return;
     }
     ClipToWindow();
@@ -383,24 +447,74 @@ std::optional<MouseMove> TakeMouse() {
     return MouseMove{float(x) * options.mouse_sensitivity, float(y) * sign * options.mouse_sensitivity};
 }
 
-bool KeyboardActive() { return g_mouse_ms >= g_pad_ms; }
-
 void Keyboard(Pad& pad) {
-    UpdatePadPress(pad);  // the controller alone, before the keys are pressed into it
     if (!Active()) {
         g_settle = true;
         return;
     }
     Binds binds = CopyBinds();
-    if (g_settle && AnyPressingKeyDown(binds)) return;
+    bool pressing = AnyPressingKeyDown(binds);
+    if (g_settle && pressing) return;
     g_settle = false;
+    if (pressing) SetKeyboard(true);
     bool play = Play();
     if (!play) ClipCursor(nullptr);
+    if (!g_menu) g_wheel = 0;
     StickKeys sticks;
     PressBoundKeys(binds, play, pad, sticks);
     if (!play) PressMenuKeys(pad);
+    if (!play) PressTap(pad);
+    if (!play && g_menu) PressWheel(pad);
     if (play && NowMs() < g_tap_until) pad.buttons |= g_tap;
     SetSticks(pad, sticks);
+}
+
+// only new presses count, so a drifting stick never takes over from the keyboard and mouse
+void SeenPad(int port, const Pad& pad) {
+    if (port < 0 || port >= kPorts) return;
+    uint32_t held = pad.buttons;
+    int bit = kPadDigitalButtons;
+    for (uint8_t analog : pad.analog) {
+        bool pressed = analog > kPadAnalogPress;
+        held |= uint32_t(pressed) << bit;
+        bit++;
+    }
+    for (int16_t axis : {pad.lx, pad.ly, pad.rx, pad.ry}) {
+        bool pressed = std::abs(int(axis)) > kPadStickPress;
+        held |= uint32_t(pressed) << bit;
+        bit++;
+    }
+    if (held & ~g_pad_held[size_t(port)].exchange(held)) SetKeyboard(false);
+}
+
+void SetMenu(bool menu) {
+    if (g_menu.exchange(menu) != menu) RefreshCursor();
+}
+
+bool KeyboardActive() { return g_keyboard; }
+
+bool CursorShown() { return g_menu && g_keyboard && !Play(); }
+
+std::optional<Pointer> Cursor() {
+    HWND hwnd = HWND(app::Window());
+    POINT point;
+    RECT client;
+    if (!Active() || !CursorShown() || !GetCursorPos(&point) || !ScreenToClient(hwnd, &point)) return std::nullopt;
+    if (!GetClientRect(hwnd, &client) || client.right <= 0 || client.bottom <= 0) return std::nullopt;
+    // the frame is shown in the middle of the window
+    float aspect = game::Aspect();
+    float width = float(client.right);
+    float height = float(client.bottom);
+    float shown_width = std::min(width, height * aspect);
+    float shown_height = shown_width / aspect;
+    float x = (float(point.x) - (width - shown_width) / 2) / shown_width;
+    float y = (float(point.y) - (height - shown_height) / 2) / shown_height;
+    return Pointer{x, y, Down(VK_LBUTTON), Down(VK_RBUTTON)};
+}
+
+void Press(Tap tap) {
+    g_press = TapBits(tap);
+    g_press_until = NowMs() + kTapMs;
 }
 
 std::span<const Action> Actions() {

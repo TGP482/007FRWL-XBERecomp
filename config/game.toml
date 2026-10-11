@@ -362,3 +362,8 @@ call = "MenuDrawBegin"
 [[hook]]
 at = 0x412F24
 call = "MenuDrawEnd"
+
+# frame tick, after the pads are read: the mouse in the Flash menus
+[[hook]]
+at = 0x224BE2
+call = "MenuCursor"

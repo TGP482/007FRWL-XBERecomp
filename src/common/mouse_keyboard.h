@@ -19,7 +19,6 @@ struct MouseMove {
     float dy;
 };
 std::optional<MouseMove> TakeMouse();  // game thread, each tick in play: asking is what marks play
-bool KeyboardActive();                 // the mouse moved after the controller's last new press
 
 // actions the keyboard can be bound to, key names comma separated
 struct Action {
@@ -35,5 +34,24 @@ void LoadBindings();    // after the settings load
 int PollCapturedKey();  // a bindable key or mouse button held now, 0 for none; marks a capture as polling
 bool PanelKey(int vk);  // the settings panel is bound to this key and no key capture wants it
 bool CaptureRecent();   // a key capture polled a moment ago
+
+// the game's own menus
+void SeenPad(int port, const Pad& pad);  // a controller's report before the keys join it: its input hides the cursor
+void SetMenu(bool menu);       // game thread, each tick: a menu page takes the input
+bool KeyboardActive();         // keyboard or mouse used last, not a controller
+bool CursorShown();            // in a menu with the keyboard or mouse used last
+
+// the cursor over the shown frame, 0 to 1 across and down, and the buttons held now
+struct Pointer {
+    float x;
+    float y;
+    bool left;
+    bool right;
+};
+std::optional<Pointer> Cursor();  // none while it is not shown
+
+// a short press on port 0's pad: the cursor gives the menus their own input
+enum class Tap { Start, Back, Up, Down, Left, Right, A, B };
+void Press(Tap tap);
 
 }  // namespace input

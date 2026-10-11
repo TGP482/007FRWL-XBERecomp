@@ -51,11 +51,11 @@ bool SwallowAltMenu(uintptr_t command, intptr_t* result) {
     return Take(result);
 }
 
-// the arrow over the panel, no cursor over the game
-bool PanelCursor(intptr_t lp, intptr_t* result) {
+// the arrow over the panel and the game's menus, no cursor in play
+bool ClientCursor(intptr_t lp, intptr_t* result) {
     if (LOWORD(lp) != HTCLIENT) return false;
     HCURSOR arrow = LoadCursorW(nullptr, MAKEINTRESOURCEW(kArrowCursorId));
-    SetCursor(app::MenuOpen() ? arrow : nullptr);
+    SetCursor(app::MenuOpen() || input::CursorShown() ? arrow : nullptr);
     *result = TRUE;
     return true;
 }
@@ -75,13 +75,14 @@ bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result) {
         case WM_SYSCOMMAND:
             return SwallowAltMenu(wp, result);
         case WM_SETCURSOR:
-            return PanelCursor(lp, result);
+            return ClientCursor(lp, result);
     }
     return false;
 }
 
 // port 0 has the keyboard; the game sees no input while the panel is open
 void Pad(int port, input::Pad& pad) {
+    input::SeenPad(port, pad);
     if (port == 0) pad.connected = true;
     if (app::MenuOpen()) {
         pad = input::Pad{.connected = pad.connected};
