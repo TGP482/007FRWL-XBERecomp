@@ -11,6 +11,8 @@ code_sections = [".text", "D3D", "XGRPH", "DSOUND", "D3DX", "XPP", ".idata"]
 
 # extra entry points
 [functions]
+0x4F1920 = ""  # stored at 0x84C794 by 0x274178
+0x4FB0B4 = ""  # thread notify callback stored at 0x846E6C by 0x4F51A8
 
 # functions the host replaces or calls by name, 0 where the image has none
 [symbols]
