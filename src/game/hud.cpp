@@ -1,5 +1,6 @@
 // 2D is laid out 640x480 and shown as wide as the output. Each widget the UI tree draws keeps its shape:
 // x' = x * narrow + anchor * spare width, anchored left, centre or right by where it sits on the screen.
+// The Flash menus stay 4:3 in the middle.
 #include <cmath>
 #include <mutex>
 #include <vector>
@@ -68,6 +69,13 @@ void HudWidgetBegin(X86Context& ctx, uint8_t*) {
 
 // after the widget's Draw
 void HudWidgetEnd(X86Context&, uint8_t*) { g_anchor = kOff; }
+
+// around the Flash player's render, 0x412F1F
+void MenuDrawBegin(X86Context&, uint8_t*) {
+    if (game::Wide()) g_anchor = kCentre;
+}
+
+void MenuDrawEnd(X86Context&, uint8_t*) { g_anchor = kOff; }
 
 // Im2DRenderPrimitive(type, vertices, count), cdecl. Moved for the call and put back after
 X86_EXTERN_FUNC(__imp__sub_00278AB0);

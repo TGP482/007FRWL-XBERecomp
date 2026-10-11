@@ -297,3 +297,12 @@ call = "HudWidgetBegin"
 [[hook]]
 at = 0x358426
 call = "HudWidgetEnd"
+
+# the Flash player's render: menus stay 4:3 on widescreen
+[[hook]]
+at = 0x412F1F
+call = "MenuDrawBegin"
+
+[[hook]]
+at = 0x412F24
+call = "MenuDrawEnd"
