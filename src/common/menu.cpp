@@ -2,7 +2,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cctype>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,6 +21,7 @@
 
 #include "app/app.h"
 #include "common/menu.h"
+#include "common/mouse_keyboard.h"
 
 namespace app {
 
@@ -30,11 +33,24 @@ std::atomic<bool> g_open{false};
 bool g_display_held = false;
 Settings g_display;
 
+const char* const kPages[] = {"RECOMP SETTINGS", "MOUSE AND KEYBOARD"};
+constexpr int kPageCount = int(std::size(kPages));
+int g_page = 0;
+
+// the key binding in progress: its keys must be let go before the next press binds
+struct Capture {
+    std::atomic<int> action{-1};  // the row being rebound, -1 when idle
+    bool armed = false;
+    int done_frame = 0;  // frame of the last bind, the key that bound must not start another
+};
+Capture g_capture;
+
 constexpr ImVec4 kPanelBg{0.04f, 0.045f, 0.05f, 0.94f};
 constexpr ImVec4 kBorder{0.55f, 0.60f, 0.68f, 0.85f};
 constexpr ImVec4 kText{0.89f, 0.90f, 0.92f, 1.0f};
 constexpr ImVec4 kHighlight{0.21f, 0.26f, 0.33f, 1.0f};
 constexpr ImVec4 kHeading{0.62f, 0.69f, 0.80f, 1.0f};
+constexpr ImVec4 kDim{0.57f, 0.60f, 0.64f, 1.0f};
 constexpr ImVec4 kField{0.11f, 0.12f, 0.14f, 1.0f};
 constexpr ImVec4 kFieldHovered{0.18f, 0.20f, 0.24f, 1.0f};
 constexpr ImVec4 kButton{0.15f, 0.17f, 0.20f, 1.0f};
@@ -78,6 +94,8 @@ constexpr DWORD kMinModeBits = 32;
 
 constexpr float kValueEms = 12.0f;  // width of the value between the arrows
 constexpr float kButtonEms = 8.0f;
+constexpr int kFooterButtons = 3;
+constexpr int kArrowCount = 2;
 constexpr float kHeadingGapEms = 0.5f;
 constexpr float kHeadingAfterEms = 0.2f;
 constexpr float kPaddingXEms = 1.6f;
@@ -158,16 +176,16 @@ int ModeIndex(const std::vector<Mode>& modes, Mode mode) {
     return index;
 }
 
-// Row text. Each function steps its setting first when step is not zero, then returns what the row shows.
+// Row steps. Each function steps its setting when step is not zero, then returns the text the row shows.
 
 std::string OnOff(bool on) { return on ? "ON" : "OFF"; }
 
-std::string DisplayModeText(Settings& s, int step) {
+std::string StepDisplayMode(Settings& s, int step) {
     if (step) s.display_mode = DisplayMode(StepIndex(int(s.display_mode), step, kDisplayModeCount));
     return kDisplayModeNames[std::min(int(s.display_mode), kDisplayModeCount - 1)];
 }
 
-void StepResolution(Settings& s, int step) {
+void StepResolutionMode(Settings& s, int step) {
     const std::vector<Mode>& modes = Modes();
     if (modes.empty()) return;
     int next = StepIndex(ModeIndex(modes, ShownMode(s)), step, int(modes.size()));
@@ -178,13 +196,13 @@ void StepResolution(Settings& s, int step) {
     s.height = native ? 0 : picked.height;
 }
 
-std::string ResolutionText(Settings& s, int step) {
-    if (step) StepResolution(s, step);
+std::string StepResolution(Settings& s, int step) {
+    if (step) StepResolutionMode(s, step);
     Mode mode = ShownMode(s);
     return std::to_string(mode.width) + "x" + std::to_string(mode.height);
 }
 
-std::string RenderResolutionText(Settings& s, int step) {
+std::string StepRenderResolution(Settings& s, int step) {
     if (step) {
         int percent = std::clamp(int(s.render_percent), kRenderMin, kRenderMax);
         int slot = StepIndex((percent - kRenderMin) / kRenderStep, step, kRenderSlots);
@@ -196,36 +214,36 @@ std::string RenderResolutionText(Settings& s, int step) {
     return std::to_string(s.render_percent) + "% (" + size + ")";
 }
 
-std::string VsyncText(Settings& s, int step) {
+std::string StepVsync(Settings& s, int step) {
     if (step) s.vsync = !s.vsync;
     return OnOff(s.vsync);
 }
 
-std::string MaxFpsText(Settings& s, int step) {
+std::string StepMaxFps(Settings& s, int step) {
     uint32_t cap = kFpsCaps[StepTable(kFpsCaps, s.fps_cap, step)];
     return cap ? std::to_string(cap) : "UNLIMITED";
 }
 
-std::string AnisoText(Settings& s, int step) { return kAnisoNames[StepTable(kAnisoValues, s.aniso, step)]; }
+std::string StepAniso(Settings& s, int step) { return kAnisoNames[StepTable(kAnisoValues, s.aniso, step)]; }
 
 // The rows. A null text is a section heading, held rows wait for Apply.
-using TextFn = std::string (*)(Settings& s, int step);
+using StepFn = std::string (*)(Settings& s, int step);
 
 struct Row {
     const char* label;
-    TextFn text;
+    StepFn text;
     bool held;
 };
 
 constexpr Row kRows[] = {
     {"DISPLAY", nullptr, false},
-    {"DISPLAY MODE", DisplayModeText, true},
-    {"RESOLUTION", ResolutionText, true},
-    {"RENDER RESOLUTION", RenderResolutionText, false},
-    {"VERTICAL SYNC", VsyncText, false},
-    {"MAX FRAME RATE", MaxFpsText, false},
+    {"DISPLAY MODE", StepDisplayMode, true},
+    {"RESOLUTION", StepResolution, true},
+    {"RENDER RESOLUTION", StepRenderResolution, false},
+    {"VERTICAL SYNC", StepVsync, false},
+    {"MAX FRAME RATE", StepMaxFps, false},
     {"GRAPHICS", nullptr, false},
-    {"ANISOTROPIC FILTERING", AnisoText, false},
+    {"ANISOTROPIC FILTERING", StepAniso, false},
 };
 
 bool SameDisplay(const Settings& a, const Settings& b) {
@@ -257,7 +275,7 @@ void Apply() {
     Save();
 }
 
-void RestoreDefaults() {
+void RestoreSettingsDefaults() {
     Settings& s = Get();
     std::string join_ip = s.join_ip;
     s = Settings{};
@@ -286,19 +304,27 @@ RowLayout MeasureRow() {
     row.width = ImGui::GetContentRegionAvail().x;
     row.height = ImGui::GetFrameHeight();
     row.value_width = ImGui::GetFontSize() * kValueEms;
-    float block_width = row.height * 2 + row.value_width + style.ItemSpacing.x * 2;
+    float block_width = row.height * kArrowCount + row.value_width + style.ItemSpacing.x * kArrowCount;
     row.block_x = row.origin.x + row.width - block_width;
     row.value_x = row.block_x + row.height + style.ItemSpacing.x;
     row.inc_x = row.value_x + row.value_width + style.ItemSpacing.x;
     return row;
 }
 
-// the row is the only nav stop; the focused row steps on the left and right keys
+// the row is the only nav stop, filled while focused; true when it was pressed
+bool DrawNavStop(const RowLayout& row, bool highlight) {
+    bool pressed = ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(row.width, row.height));
+    if (highlight || ImGui::IsItemFocused()) {
+        ImU32 fill = ImGui::GetColorU32(ImGuiCol_Header);
+        ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), fill);
+    }
+    return pressed;
+}
+
+// the focused row steps on the left and right keys
 int FocusedStep(const RowLayout& row) {
-    ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(row.width, row.height));
+    DrawNavStop(row, false);
     if (!ImGui::IsItemFocused()) return 0;
-    ImU32 fill = ImGui::GetColorU32(ImGuiCol_Header);
-    ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), fill);
     if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) return -1;
     if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight)) return 1;
     return 0;
@@ -310,20 +336,31 @@ void DrawLabel(const RowLayout& row, const char* label) {
     ImGui::TextUnformatted(label);
 }
 
+void DrawValueText(const RowLayout& row, const char* value) {
+    float centred = (row.value_width - ImGui::CalcTextSize(value).x) * 0.5f;
+    ImGui::SetCursorPos(ImVec2(row.value_x + std::max(centred, 0.0f), row.origin.y));
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(value);
+}
+
 // the arrows keep stepping while held
 int DrawValueBlock(const RowLayout& row, const char* value) {
     int step = 0;
     ImGui::PushItemFlag(ImGuiItemFlags_NoNav | ImGuiItemFlags_ButtonRepeat, true);
     ImGui::SetCursorPos(ImVec2(row.block_x, row.origin.y));
     if (ImGui::ArrowButton("##dec", ImGuiDir_Left)) step = -1;
-    float centred = (row.value_width - ImGui::CalcTextSize(value).x) * 0.5f;
-    ImGui::SetCursorPos(ImVec2(row.value_x + std::max(centred, 0.0f), row.origin.y));
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(value);
+    DrawValueText(row, value);
     ImGui::SetCursorPos(ImVec2(row.inc_x, row.origin.y));
     if (ImGui::ArrowButton("##inc", ImGuiDir_Right)) step = 1;
     ImGui::PopItemFlag();
     return step;
+}
+
+// closes the PushID a row opened and moves past the row
+void EndRow(const RowLayout& row) {
+    ImGui::PopID();
+    ImGui::SetCursorPos(row.origin);
+    ImGui::Dummy(ImVec2(row.width, row.height));
 }
 
 // the step asked for this frame, 0 for none
@@ -333,9 +370,7 @@ int OptionRow(const char* label, const char* value) {
     int key_step = FocusedStep(row);
     DrawLabel(row, label);
     int arrow_step = DrawValueBlock(row, value);
-    ImGui::PopID();
-    ImGui::SetCursorPos(row.origin);
-    ImGui::Dummy(ImVec2(row.width, row.height));
+    EndRow(row);
     return arrow_step ? arrow_step : key_step;
 }
 
@@ -354,7 +389,8 @@ void DrawRow(const Row& row) {
         DrawHeading(row.label);
         return;
     }
-    Settings& shown = row.held && g_display_held ? g_display : Get();
+    bool pending = row.held && g_display_held;
+    Settings& shown = pending ? g_display : Get();
     int step = OptionRow(row.label, row.text(shown, 0).c_str());
     if (step == 0) return;
     if (row.held) {
@@ -364,6 +400,114 @@ void DrawRow(const Row& row) {
     }
 }
 
+// Key bindings.
+
+std::string KeyText(std::string keys) {
+    if (keys.empty()) return "UNBOUND";
+    for (char& c : keys) c = c == ',' ? '/' : char(std::toupper(uint8_t(c)));
+    return keys;
+}
+
+void CancelCapture() { g_capture.action = -1; }
+
+void StartCapture(int action) {
+    g_capture.action = action;
+    g_capture.armed = false;
+}
+
+void EndCapture() {
+    CancelCapture();
+    g_capture.done_frame = ImGui::GetFrameCount();
+}
+
+// a row or a tab was just bound or chosen: nothing may start on the frame after a bind
+bool BindingSettled() { return !Capturing() && ImGui::GetFrameCount() > g_capture.done_frame + 1; }
+
+// Escape cancels, any other bindable key or mouse button binds
+void PollCapture() {
+    if (!Capturing()) return;
+    int vk = input::PollCapturedKey();
+    if (!g_capture.armed) {
+        g_capture.armed = vk == 0;
+        return;
+    }
+    if (vk == 0) return;
+    if (vk != VK_ESCAPE) input::Bind(size_t(g_capture.action.load()), vk);
+    EndCapture();
+}
+
+// label left, the keys where the value sits; Enter or a click starts the capture
+bool BindRow(const char* label, const std::string& keys, bool capturing) {
+    RowLayout row = MeasureRow();
+    ImGui::PushID(label);
+    bool pressed = DrawNavStop(row, capturing);
+    DrawLabel(row, label);
+    if (capturing) ImGui::PushStyleColor(ImGuiCol_Text, kHeading);
+    DrawValueText(row, capturing ? "PRESS A KEY" : keys.c_str());
+    if (capturing) ImGui::PopStyleColor();
+    EndRow(row);
+    return pressed;
+}
+
+void DrawBindRows() {
+    DrawHeading("KEYBOARD");
+    std::span<const input::Action> actions = input::Actions();
+    for (size_t i = 0; i < actions.size(); i++) {
+        bool capturing = g_capture.action == int(i);
+        std::string keys = KeyText(input::Binding(i));
+        bool pressed = BindRow(actions[i].label, keys, capturing);
+        if (pressed && BindingSettled()) StartCapture(int(i));
+    }
+}
+
+void RestoreDefaults(int page) {
+    CancelCapture();
+    if (page == 0) {
+        RestoreSettingsDefaults();
+    } else {
+        input::ResetBindings();
+    }
+}
+
+// Pages. LB and RB step the tabs, one tab a page as wide as they share the line.
+
+int TabStep() {
+    return int(ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) - int(ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false));
+}
+
+// the page's tab, selected by a step when stepped is set; a click selects it
+void DrawTab(int page, float width, bool stepped) {
+    ImGui::SetNextItemWidth(width);
+    ImGuiTabItemFlags flags = stepped && page == g_page ? ImGuiTabItemFlags_SetSelected : 0;
+    if (!ImGui::BeginTabItem(kPages[page], nullptr, flags)) return;
+    bool clicked = !stepped && page != g_page;
+    if (clicked) {
+        g_page = page;
+        CancelCapture();
+    }
+    ImGui::EndTabItem();
+}
+
+void DrawTabs() {
+    // a selection made here shows from the next frame, the tab drawn this one still reads as selected
+    int step = TabStep();
+    bool stepped = step != 0 && BindingSettled();
+    if (stepped) g_page = StepIndex(g_page, step, kPageCount);
+    ImGui::PushStyleColor(ImGuiCol_Tab, kField);
+    ImGui::PushStyleColor(ImGuiCol_TabHovered, kFieldHovered);
+    ImGui::PushStyleColor(ImGuiCol_TabSelected, kHighlight);
+    ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline, kHeading);
+    ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 0.0f);
+    if (ImGui::BeginTabBar("##pages")) {
+        float spacing = ImGui::GetStyle().ItemInnerSpacing.x * float(kPageCount - 1);
+        float width = (ImGui::GetContentRegionAvail().x - spacing) / float(kPageCount);
+        for (int page = 0; page < kPageCount; page++) DrawTab(page, width, stepped);
+        ImGui::EndTabBar();
+    }
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(4);
+}
+
 void DrawTitle() {
     const char* title = "SETTINGS";
     float spare = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(title).x;
@@ -371,15 +515,21 @@ void DrawTitle() {
     ImGui::TextUnformatted(title);
 }
 
+void DrawHint() {
+    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+    ImGui::TextUnformatted(Capturing() ? "Press a key or mouse button to bind, Escape cancels" : "");
+    ImGui::PopStyleColor();
+}
+
 void DrawFooter() {
     float em = ImGui::GetFontSize();
     float button_width = em * kButtonEms;
     float spacing = ImGui::GetStyle().ItemSpacing.x;
-    float spare = ImGui::GetContentRegionAvail().x - button_width * 3 - spacing * 2;
+    float spare = ImGui::GetContentRegionAvail().x - button_width * kFooterButtons - spacing * (kFooterButtons - 1);
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(spare, 0.0f));
     if (ImGui::Button("Back", ImVec2(button_width, 0))) ToggleMenu();
     ImGui::SameLine();
-    if (ImGui::Button("Defaults", ImVec2(button_width, 0))) RestoreDefaults();
+    if (ImGui::Button("Defaults", ImVec2(button_width, 0))) RestoreDefaults(g_page);
     ImGui::SameLine();
     ImGui::BeginDisabled(!g_display_held);
     if (ImGui::Button("Apply", ImVec2(button_width, 0))) Apply();
@@ -409,11 +559,17 @@ void DrawPanel() {
     PanelStyle style;
     if (ImGui::Begin("##settings", nullptr, kWindowFlags)) {
         DrawTitle();
-        float footer = ImGui::GetFrameHeightWithSpacing() + em;
+        DrawTabs();
+        float footer = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() + em;
         ImGui::BeginChild("##rows", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
-        for (const Row& row : kRows) DrawRow(row);
+        if (g_page == 0) {
+            for (const Row& row : kRows) DrawRow(row);
+        } else {
+            DrawBindRows();
+        }
         ImGui::EndChild();
         ImGui::Separator();
+        DrawHint();
         DrawFooter();
     }
     ImGui::End();
@@ -423,21 +579,40 @@ void DrawPanel() {
 
 bool MenuOpen() { return g_open.load(std::memory_order_relaxed); }
 
+bool Capturing() { return g_capture.action >= 0; }
+
+// Windows asks for the cursor only when the mouse moves
+void RefreshCursor() {
+    void* hwnd = Window();
+    if (hwnd) PostMessageW(HWND(hwnd), WM_SETCURSOR, WPARAM(hwnd), MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+}
+
 void ToggleMenu() {
     g_open.store(!MenuOpen(), std::memory_order_relaxed);
     g_display_held = false;
+    CancelCapture();
+    input::Settle();
+    RefreshCursor();
 }
 
-void DrawUi(double /*fps*/) {
-    ImGuiIO& io = ImGui::GetIO();
+// ImGui sets the cursor only while the panel is open
+void UpdateCursorFlag(ImGuiIO& io) {
     if (MenuOpen()) {
         io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
     } else {
         io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     }
+}
+
+void DrawUi(double /*fps*/) {
+    ImGuiIO& io = ImGui::GetIO();
+    UpdateCursorFlag(io);
     io.KeyRepeatRate = kRepeatSeconds;
     io.FontGlobalScale = std::max(kMinFontScale, io.DisplaySize.y / kFontScaleLines);
-    if (MenuOpen()) DrawPanel();
+    if (MenuOpen()) {
+        PollCapture();
+        DrawPanel();
+    }
 }
 
 }  // namespace app

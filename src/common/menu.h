@@ -4,6 +4,7 @@
 namespace app {
 
 bool MenuOpen();
+bool Capturing();  // a key binding waits for a key
 void ToggleMenu();
 void DrawUi(double fps);  // fps is unused until the counter exists
 

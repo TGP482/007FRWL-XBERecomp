@@ -1,0 +1,344 @@
+// the keyboard as the controller on port 0
+#include "common/mouse_keyboard.h"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cctype>
+#include <chrono>
+#include <cstdint>
+#include <iterator>
+#include <mutex>
+#include <vector>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include "app/app.h"
+#include "common/menu.h"
+#include "common/options.h"
+
+namespace input {
+
+namespace {
+
+// what an action presses on the pad
+enum AnalogButton {
+    kA,
+    kB,
+    kX,
+    kY,
+    kBlack,
+    kWhite,
+    kLeftTrigger,
+    kRightTrigger,
+};
+enum PadButton {
+    kDpadUp,
+    kDpadDown,
+    kDpadLeft,
+    kDpadRight,
+    kStart,
+    kBack,
+    kLeftThumb,
+    kRightThumb,
+};
+enum Move {
+    kForward,
+    kBackward,
+    kLeft,
+    kRight,
+    kMoveCount,
+};
+enum class Kind { Analog, Button, Move, Host };
+
+struct Entry {
+    Action action;
+    Kind kind;
+    int index;
+};
+
+// the game's controller layout
+constexpr Entry kEntries[] = {
+    {{"move_forward", "MOVE FORWARD", "W"}, Kind::Move, kForward},
+    {{"move_back", "MOVE BACK", "S"}, Kind::Move, kBackward},
+    {{"strafe_left", "STRAFE LEFT", "A"}, Kind::Move, kLeft},
+    {{"strafe_right", "STRAFE RIGHT", "D"}, Kind::Move, kRight},
+    {{"jump", "JUMP", "Space"}, Kind::Analog, kA},
+    {{"interact", "INTERACT / CLIMB", "F"}, Kind::Analog, kA},
+    {{"reload", "RELOAD", "R"}, Kind::Analog, kA},
+    {{"dive_roll", "DIVE ROLL", "Shift"}, Kind::Analog, kB},
+    {{"focus", "FOCUS", "E"}, Kind::Analog, kX},
+    {{"wall_cover", "WALL COVER / EXIT VEHICLE", "Ctrl"}, Kind::Analog, kY},
+    {{"crouch", "CROUCH", "C"}, Kind::Analog, kBlack},
+    {{"item_select", "ITEM SELECT", "Q"}, Kind::Analog, kWhite},
+    {{"lock_on", "LOCK ON", "RMB"}, Kind::Analog, kLeftTrigger},
+    {{"fire", "FIRE", "LMB"}, Kind::Analog, kRightTrigger},
+    {{"zoom_in", "SCOPE ZOOM IN", "Z"}, Kind::Button, kDpadUp},
+    {{"zoom_out", "SCOPE ZOOM OUT", "X"}, Kind::Button, kDpadDown},
+    {{"reset_camera", "RESET CAMERA", "V"}, Kind::Button, kRightThumb},
+    {{"objectives", "OBJECTIVES", "Tab"}, Kind::Button, kBack},
+    {{"pause", "PAUSE MENU", "Escape"}, Kind::Button, kStart},
+    {{"settings_panel", "SETTINGS PANEL", "F10"}, Kind::Host, 0},
+};
+constexpr size_t kCount = std::size(kEntries);
+
+constexpr size_t PanelActionIndex() {
+    size_t i = 0;
+    while (kEntries[i].kind != Kind::Host) i++;
+    return i;
+}
+constexpr size_t kPanelAction = PanelActionIndex();
+
+constexpr uint8_t kFullPress = 0xFF;
+constexpr int16_t kFullStick = 32767;
+constexpr uint64_t kCaptureGuardMs = 250;  // the panel key waits this long after a key capture poll
+constexpr size_t kMaxKeysPerAction = 2;
+constexpr int kFirstVk = 1;
+constexpr int kEndVk = 255;
+
+struct Name {
+    int vk;
+    const char* name;
+};
+// letters, digits and F keys are named by their own character; F3 stays with the host
+constexpr Name kNames[] = {
+    {VK_LBUTTON, "LMB"}, {VK_RBUTTON, "RMB"}, {VK_MBUTTON, "MMB"}, {VK_XBUTTON1, "Mouse4"}, {VK_XBUTTON2, "Mouse5"},
+    {VK_SPACE, "Space"}, {VK_ESCAPE, "Escape"}, {VK_TAB, "Tab"}, {VK_SHIFT, "Shift"}, {VK_CONTROL, "Ctrl"},
+    {VK_MENU, "Alt"}, {VK_CAPITAL, "CapsLock"}, {VK_INSERT, "Insert"}, {VK_DELETE, "Delete"}, {VK_HOME, "Home"},
+    {VK_END, "End"}, {VK_PRIOR, "PageUp"}, {VK_NEXT, "PageDown"},
+    {VK_NUMPAD0, "Numpad0"}, {VK_NUMPAD1, "Numpad1"}, {VK_NUMPAD2, "Numpad2"}, {VK_NUMPAD3, "Numpad3"},
+    {VK_NUMPAD4, "Numpad4"}, {VK_NUMPAD5, "Numpad5"}, {VK_NUMPAD6, "Numpad6"}, {VK_NUMPAD7, "Numpad7"},
+    {VK_NUMPAD8, "Numpad8"}, {VK_NUMPAD9, "Numpad9"}, {VK_ADD, "NumpadPlus"}, {VK_SUBTRACT, "NumpadMinus"},
+    {VK_MULTIPLY, "NumpadStar"}, {VK_DIVIDE, "NumpadSlash"}, {VK_DECIMAL, "NumpadPeriod"},
+    {VK_OEM_3, "Backtick"}, {VK_OEM_MINUS, "Minus"}, {VK_OEM_PLUS, "Equals"}, {VK_OEM_4, "LBracket"},
+    {VK_OEM_6, "RBracket"}, {VK_OEM_5, "Backslash"}, {VK_OEM_1, "Semicolon"}, {VK_OEM_7, "Quote"},
+    {VK_OEM_COMMA, "Comma"}, {VK_OEM_PERIOD, "Period"}, {VK_OEM_2, "Slash"},
+};
+
+constexpr int kFirstFKey = 1;
+constexpr int kLastFKey = 12;
+constexpr int kHostFKey = 3;
+
+using Binds = std::array<std::vector<int>, kCount>;
+using MoveKeys = std::array<bool, kMoveCount>;
+
+std::mutex g_bind_lock;
+Binds g_binds;
+std::atomic<bool> g_settle{false};
+std::atomic<uint64_t> g_capture_ms{0};
+
+uint64_t NowMs() {
+    auto since = std::chrono::steady_clock::now().time_since_epoch();
+    return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(since).count()) + 1;
+}
+
+bool IsLetterOrDigit(int vk) { return (vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9'); }
+
+bool IsBindableFKey(int vk) {
+    int number = vk - VK_F1 + 1;
+    return number >= kFirstFKey && number <= kLastFKey && number != kHostFKey;
+}
+
+// empty for a key that cannot be bound
+std::string NameOf(int vk) {
+    if (IsLetterOrDigit(vk)) return std::string(1, char(vk));
+    if (IsBindableFKey(vk)) return "F" + std::to_string(vk - VK_F1 + 1);
+    for (const Name& n : kNames) {
+        if (n.vk == vk) return n.name;
+    }
+    return {};
+}
+
+int Vk(const std::string& name) {
+    if (name.size() == 1 && std::isalnum(uint8_t(name[0]))) return std::toupper(uint8_t(name[0]));
+    for (int vk = VK_F1; vk <= VK_F12; vk++) {
+        if (IsBindableFKey(vk) && _stricmp(NameOf(vk).c_str(), name.c_str()) == 0) return vk;
+    }
+    for (const Name& n : kNames) {
+        if (_stricmp(n.name, name.c_str()) == 0) return n.vk;
+    }
+    return 0;
+}
+
+std::vector<int> Parse(const std::string& list) {
+    std::vector<int> keys;
+    size_t start = 0;
+    while (start <= list.size()) {
+        size_t comma = list.find(',', start);
+        if (comma == std::string::npos) comma = list.size();
+        if (int vk = Vk(list.substr(start, comma - start))) keys.push_back(vk);
+        start = comma + 1;
+    }
+    return keys;
+}
+
+std::string Join(const std::vector<int>& keys) {
+    std::string text;
+    for (int vk : keys) {
+        if (!text.empty()) text += ',';
+        text += NameOf(vk);
+    }
+    return text;
+}
+
+bool Down(int vk) { return GetAsyncKeyState(vk) < 0; }
+
+bool IsMouseButton(int vk) {
+    return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+}
+
+// the game window has the keyboard and the panel is closed
+bool Active() { return GetForegroundWindow() == app::Window() && !app::MenuOpen(); }
+
+Binds CopyBinds() {
+    std::lock_guard lock(g_bind_lock);
+    return g_binds;
+}
+
+bool AnyDown(const std::vector<int>& keys) { return std::any_of(keys.begin(), keys.end(), Down); }
+
+constexpr int kArrows[] = {VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT};
+
+// keys held when the window got the input wait for release
+bool AnyPressingKeyDown(const Binds& binds) {
+    bool menu_key = Down(VK_RETURN) || Down(VK_BACK) || std::any_of(std::begin(kArrows), std::end(kArrows), Down);
+    if (menu_key) return true;
+    return std::any_of(binds.begin(), binds.end(), [](const std::vector<int>& keys) { return AnyDown(keys); });
+}
+
+void Press(const Entry& entry, Pad& pad, MoveKeys& move) {
+    switch (entry.kind) {
+        case Kind::Analog:
+            pad.analog[entry.index] = kFullPress;
+            break;
+        case Kind::Button:
+            pad.buttons |= uint16_t(1u << entry.index);
+            break;
+        case Kind::Move:
+            move[size_t(entry.index)] = true;
+            break;
+        case Kind::Host:
+            break;
+    }
+}
+
+void PressBoundKeys(const Binds& binds, Pad& pad, MoveKeys& move) {
+    for (size_t i = 0; i < kCount; i++) {
+        if (AnyDown(binds[i])) Press(kEntries[i], pad, move);
+    }
+}
+
+// not bindable: the arrows are the dpad, Enter accepts, Backspace backs out
+void PressMenuKeys(Pad& pad) {
+    if (Down(VK_RETURN)) pad.analog[kA] = kFullPress;
+    if (Down(VK_BACK)) pad.analog[kB] = kFullPress;
+    for (size_t i = 0; i < std::size(kArrows); i++) {
+        int bit = kDpadUp + int(i);
+        if (Down(kArrows[i])) pad.buttons |= uint16_t(1u << bit);
+    }
+}
+
+// a new key joins the action's keys and the older goes past the maximum; a key it has comes off unless it is the last
+void AddKey(std::vector<int>& keys, int vk) {
+    auto found = std::find(keys.begin(), keys.end(), vk);
+    if (found != keys.end()) {
+        if (keys.size() > 1) keys.erase(found);
+        return;
+    }
+    keys.push_back(vk);
+    if (keys.size() > kMaxKeysPerAction) keys.erase(keys.begin());
+}
+
+int Axis(bool positive, bool negative) { return int(positive) - int(negative); }
+
+void SetLeftStick(Pad& pad, const MoveKeys& move) {
+    if (int x = Axis(move[kRight], move[kLeft])) pad.lx = int16_t(x * kFullStick);
+    if (int y = Axis(move[kForward], move[kBackward])) pad.ly = int16_t(y * kFullStick);
+}
+
+}  // namespace
+
+void Settle() { g_settle = true; }
+
+void Keyboard(Pad& pad) {
+    if (!Active()) {
+        g_settle = true;
+        return;
+    }
+    Binds binds = CopyBinds();
+    if (g_settle && AnyPressingKeyDown(binds)) return;
+    g_settle = false;
+    MoveKeys move{};
+    PressBoundKeys(binds, pad, move);
+    PressMenuKeys(pad);
+    SetLeftStick(pad, move);
+}
+
+std::span<const Action> Actions() {
+    static const std::array<Action, kCount> list = [] {
+        std::array<Action, kCount> actions{};
+        for (size_t i = 0; i < kCount; i++) actions[i] = kEntries[i].action;
+        return actions;
+    }();
+    return list;
+}
+
+std::string Binding(size_t action) {
+    std::lock_guard lock(g_bind_lock);
+    return action < kCount ? Join(g_binds[action]) : std::string();
+}
+
+void Bind(size_t action, int vk) {
+    if (action >= kCount || NameOf(vk).empty()) return;
+    // the settings panel acts on the window's key messages, which mouse buttons do not send
+    if (kEntries[action].kind == Kind::Host && IsMouseButton(vk)) return;
+    {
+        std::lock_guard lock(g_bind_lock);
+        AddKey(g_binds[action], vk);
+        game::Opt().keys[kEntries[action].action.id] = Join(g_binds[action]);
+    }
+    app::Save();
+}
+
+void ResetBindings() {
+    game::Opt().keys.clear();
+    LoadBindings();
+    app::Save();
+}
+
+void LoadBindings() {
+    std::lock_guard lock(g_bind_lock);
+    const auto& saved = game::Opt().keys;
+    for (size_t i = 0; i < kCount; i++) {
+        auto found = saved.find(kEntries[i].action.id);
+        std::string names = found != saved.end() ? found->second : kEntries[i].action.defaults;
+        g_binds[i] = Parse(names);
+        // a hand edited file may name no key at all, which would leave the action out of reach
+        if (g_binds[i].empty()) g_binds[i] = Parse(kEntries[i].action.defaults);
+    }
+}
+
+int PollCapturedKey() {
+    g_capture_ms = NowMs();
+    for (int vk = kFirstVk; vk < kEndVk; vk++) {
+        if (Down(vk) && !NameOf(vk).empty()) return vk;
+    }
+    return 0;
+}
+
+bool CaptureRecent() { return NowMs() - g_capture_ms <= kCaptureGuardMs; }
+
+bool PanelKey(int vk) {
+    if (CaptureRecent()) return false;
+    std::lock_guard lock(g_bind_lock);
+    const std::vector<int>& keys = g_binds[kPanelAction];
+    return std::find(keys.begin(), keys.end(), vk) != keys.end();
+}
+
+}  // namespace input
