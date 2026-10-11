@@ -144,6 +144,15 @@ O vs(uint id : SV_VertexID) {
 float psmain(O i) : SV_Depth { return img.SampleLevel(ps, i.uv, 0); }
 )";
 
+const char* kClearHlsl = R"(
+cbuffer B : register(b1) { float4 colour; };
+float4 vs(uint id : SV_VertexID) : SV_Position {
+    float2 t = float2((id << 1) & 2, id & 2);
+    return float4(t * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float4 psmain() : SV_Target { return colour; }
+)";
+
 float Bits(uint32_t v) {
     float f;
     std::memcpy(&f, &v, 4);
@@ -591,6 +600,8 @@ private:
         uint32_t stencil;
     };
     void ClearTarget(Target& t, const State& s, const ClearArgs& c, std::vector<D3D12_RECT>& rs);
+    void ClearChannels(Target& t, const float col[4], uint8_t mask, const std::vector<D3D12_RECT>& rs);
+    ID3D12PipelineState* EnsureClearPipeline(DXGI_FORMAT rtv, uint8_t mask);
     // Copy's guest lists: count src_rects, dst_points 0 or one per rect
     struct CopyList {
         uint32_t count;
@@ -2372,9 +2383,47 @@ void D3D12Backend::ClearTarget(Target& t, const State& s, const ClearArgs& c, st
         float col[4];
         Color(c.color, col);
         for (int i = 0; t.range != 1 && i < 3; i++) col[i] /= t.range;
-        cl_->ClearRenderTargetView(Cpu(rtv_heap_.Get(), t.view, rtv_inc_), col, UINT(rs.size()), rs.data());
+        // D3DCLEAR_TARGET_R/G/B/A are bits 4 to 7, D3D12's write mask has the same order
+        uint8_t mask = uint8_t((c.flags & kClearTarget) >> 4);
+        if (mask == D3D12_COLOR_WRITE_ENABLE_ALL) {
+            cl_->ClearRenderTargetView(Cpu(rtv_heap_.Get(), t.view, rtv_inc_), col, UINT(rs.size()), rs.data());
+        } else {
+            ClearChannels(t, col, mask, rs);
+        }
     }
     t.drawn = true;
+}
+
+// ClearChannels' pipeline for the target format and channel mask, kept in blit_psos_; null when it can't be made
+ID3D12PipelineState* D3D12Backend::EnsureClearPipeline(DXGI_FORMAT rtv, uint8_t mask) {
+    uint64_t seed = uint64_t(rtv) << 8 | mask;
+    auto& pso = blit_psos_[Hash(kClearHlsl, std::strlen(kClearHlsl), seed)];
+    if (pso) return pso.Get();
+    uint64_t h;
+    ID3DBlob* vs = Compile(kClearHlsl, "vs", "vs_5_0", h);
+    ID3DBlob* ps = Compile(kClearHlsl, "psmain", "ps_5_0", h);
+    if (!vs || !ps) return nullptr;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d = FullScreenPipelineDesc(vs, ps, rtv);
+    d.BlendState.RenderTarget[0].RenderTargetWriteMask = mask;
+    if (FAILED(dev_->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&pso)))) return nullptr;
+    return pso.Get();
+}
+
+// a clear of some colour channels, the alpha alone for a sun glare test: drawn over each rect writing only those
+void D3D12Backend::ClearChannels(Target& t, const float col[4], uint8_t mask, const std::vector<D3D12_RECT>& rs) {
+    ID3D12PipelineState* pso = EnsureClearPipeline(t.fmt, mask);
+    if (!pso) {
+        LOG_FIRST(4, "d3d12: channel clear pipeline failed, mask %X", mask);
+        return;
+    }
+    SetBlitTarget(Cpu(rtv_heap_.Get(), t.view, rtv_inc_), t.w, t.h);
+    Alloc cb = Upload(256, 256);
+    std::memcpy(cb.cpu, col, 4 * sizeof(float));
+    uint32_t slot = AllocSrvSlots(1);
+    for (const D3D12_RECT& r : rs) {
+        cl_->RSSetScissorRects(1, &r);
+        DrawFullScreen(pso, cb.gpu, slot);
+    }
 }
 
 void D3D12Backend::Clear(const State& s, uint32_t count, const uint8_t* rects, uint32_t flags, uint32_t color, float z,
