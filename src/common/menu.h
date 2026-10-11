@@ -24,6 +24,7 @@ struct Row {
 const Row* Page(int page, size_t* count);         // 0 the settings, 1 mouse and keyboard
 std::string Value(const Row& row, int step = 0);  // what the row shows, stepped first when step is not zero
 void Defaults(int page);
+void Bind(const Row& row);  // a bind row waits for the next key, as the panel's does; Escape cancels
 
 }  // namespace rows
 

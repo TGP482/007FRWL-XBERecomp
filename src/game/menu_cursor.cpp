@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "common/aspect.h"
+#include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "game/flash.h"
 #include "game/options_menu.h"
@@ -423,7 +424,8 @@ void UpdateCursor(X86Context& ctx) {
     std::optional<input::Pointer> cursor = screen ? input::Cursor() : std::nullopt;
     if (!cursor) return;
     Edges edges = LatchEdges(screen, *cursor);
-    if (!TakesInput(screen)) return;
+    // a key binding waits for the next press, mouse buttons too
+    if (app::Capturing() || !TakesInput(screen)) return;
     if (edges.back) input::Press(KeysOf(screen).cancel);
     if (edges.moved || edges.click) ApplyPointer(ctx, screen, StagePoint(*cursor), edges);
 }

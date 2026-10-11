@@ -487,6 +487,11 @@ void Keyboard(Pad& pad) {
         g_settle = true;
         return;
     }
+    // a bind started in the game's options menu takes the next key, and the key that bound waits for release
+    if (app::Capturing()) {
+        g_settle = true;
+        return;
+    }
     Binds binds = CopyBinds();
     bool pressing = AnyPressingKeyDown(binds);
     if (g_settle && pressing) return;

@@ -695,6 +695,7 @@ const rows::Row* rows::Page(int page, size_t* count) {
 
 // the game's menu applies a change at once, display rows too
 std::string rows::Value(const Row& row, int step) {
+    if (row.kind == Kind::Bind && g_capture.action == row.id) return "PRESS A KEY";
     if (row.kind == Kind::Bind) return KeyText(input::Binding(size_t(row.id)));
     if (row.kind != Kind::Value) return {};
     std::string text = kSteps[row.id](Get(), step);
@@ -705,6 +706,10 @@ std::string rows::Value(const Row& row, int step) {
 }
 
 void rows::Defaults(int page) { RestoreDefaults(page); }
+
+void rows::Bind(const Row& row) {
+    if (row.kind == Kind::Bind && !Capturing()) StartCapture(row.id);
+}
 
 bool MenuOpen() { return g_open.load(std::memory_order_relaxed); }
 
@@ -739,10 +744,8 @@ void DrawUi(double fps) {
     UpdateCursorFlag(io);
     io.KeyRepeatRate = kRepeatSeconds;
     io.FontGlobalScale = std::max(kMinFontScale, io.DisplaySize.y / kFontScaleLines);
-    if (MenuOpen()) {
-        PollCapture();
-        DrawPanel();
-    }
+    PollCapture();  // a bind started in the game's options menu waits here too
+    if (MenuOpen()) DrawPanel();
 }
 
 }  // namespace app

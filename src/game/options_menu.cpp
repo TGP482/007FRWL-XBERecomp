@@ -98,7 +98,7 @@ constexpr int kMaxRows = 8;
 constexpr size_t kMaxRaw = 64;
 
 // an entry's page is rows::Page of its index
-const char* const kEntries[] = {"RECOMP SETTINGS"};
+const char* const kEntries[] = {"RECOMP SETTINGS", "MOUSE AND KEYBOARD"};
 constexpr int kEntryCount = int(std::size(kEntries));
 const char* const kDefaultsLabel = "RESTORE DEFAULTS";
 
@@ -286,6 +286,8 @@ void ActivateRow() {
         app::rows::Defaults(g_state.page);
     } else if (row->kind == Kind::Value) {
         app::rows::Value(*row, 1);
+    } else {
+        app::rows::Bind(*row);
     }
 }
 
@@ -330,15 +332,17 @@ bool OwnsScreen(uint32_t screen) {
     return R32(screen + kScreenTakesInput) == 1 && R32(screen + kScreenBlocked) == 0;
 }
 
-// true when the options menu dealt with a button the screen got
+// true when the options menu dealt with a button the screen got; a bind waiting for its key keeps them all
 bool TakeButton(X86Context& ctx, uint32_t screen, uint32_t code) {
     if (!OwnsScreen(screen)) return false;
+    if (app::Capturing()) return true;
     return PageOpen() ? TakePageButton(ctx, code) : TakeListButton(ctx, code);
 }
 
 // a held direction on a page steps again after the screens' delays
 bool TakeHeldButton(X86Context& ctx, uint32_t screen, uint32_t code) {
     if (!OwnsScreen(screen) || !PageOpen()) return false;
+    if (app::Capturing()) return true;
     Repeat& repeat = g_state.repeat;
     bool direction = code >= kButtonUp && code <= kButtonRight;
     if (!direction) return false;
