@@ -1,7 +1,10 @@
 // Button prompts on keyboard and mouse. A menu's button legend is a Flash clip of the button's picture between two
 // texts (the shadow and the text): with the keyboard or mouse used last the picture is hidden and the text leads with
-// the key, "(ENTER) Select". The game draws every line of text through one call, where the legends are relabelled.
+// the key, "(ENTER) Select". The game draws every line of text through one call, where the legends are relabelled
+// and a button the font draws as a picture ("Press[RDDown]to continue") is named by its key.
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <vector>
@@ -49,6 +52,24 @@ constexpr Legend kLegends[] = {
     {{44, 43, 45}, {kA}},             // selectBtn
     {{218, 219, 220}, {kA}},          // the briefcase's equip legend
     {{29, 21, 30}, {kA}},             // buttonsfrontend continueBtn
+};
+
+// a pad button in a text, "[RDDown]", by the start of its name: other languages add their own letters ("[RSTopFR]")
+struct Token {
+    const char* name;
+    Buttons buttons;
+};
+constexpr Token kTokens[] = {
+    {"RDDown", {kA}},
+    {"RDRight", {kB}},
+    {"RDLeft", {kX}},
+    {"RDUp", {kY}},
+    {"RSBottom", {kBlack}},
+    {"LSBottom", {kWhite}},
+    {"LSTop", {kLeftTrigger}},
+    {"RSTop", {kRightTrigger}},
+    {"LDUpDown", {kUp, kDown}},
+    {"LDLeftRight", {kLeft, kRight}},
 };
 
 constexpr int kMaxTreeDepth = 12;
@@ -184,10 +205,41 @@ bool LeadWithKey(std::string& text) {
     return false;
 }
 
+const Token* TokenNamed(const std::string& name) {
+    for (const Token& token : kTokens) {
+        if (name.compare(0, std::strlen(token.name), token.name) == 0) return &token;
+    }
+    return nullptr;
+}
+
+bool SpaceAt(const std::string& text, size_t at) {
+    return at >= text.size() || std::isspace(static_cast<unsigned char>(text[at]));
+}
+
+// the token's picture had room around it; the key is set apart by spaces
+bool NameKeys(std::string& text) {
+    bool menu = input::CursorShown();
+    bool changed = false;
+    for (size_t open = text.find('['); open != std::string::npos; open = text.find('[', open + 1)) {
+        size_t close = text.find(']', open);
+        if (close == std::string::npos) break;
+        const Token* token = TokenNamed(text.substr(open + 1, close - open - 1));
+        std::string label = token ? Label(token->buttons, menu) : std::string();
+        if (label.empty()) continue;
+        std::string before = open == 0 || SpaceAt(text, open - 1) ? "" : " ";
+        std::string after = SpaceAt(text, close + 1) ? "" : " ";
+        std::string named = before + label + after;
+        text.replace(open, close - open + 1, named);
+        open += named.size() - 1;
+        changed = true;
+    }
+    return changed;
+}
+
 std::optional<std::string> Reworded(const char* line) {
     std::string text(line, strnlen(line, kMaxText));
     bool changed = false;
-    if (input::KeyboardActive()) changed = LeadWithKey(text);
+    if (input::KeyboardActive()) changed = LeadWithKey(text) || NameKeys(text);
     if (!changed || text.size() >= kMaxText) return std::nullopt;
     return text;
 }
