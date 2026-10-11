@@ -92,6 +92,7 @@ D3DDevice_InsertFence                                = 0x5E5270
 D3DDevice_IsFencePending                             = 0x5E0A20
 D3DDevice_LightEnable                                = 0x5E6960
 D3DDevice_LoadVertexShader                           = 0x5E1DF0
+D3DDevice_LoadVertexShaderProgram                    = 0x5E1E50  # (function, slot)
 D3DDevice_MakeSpace                                  = 0x5E0FC0
 D3DDevice_PersistDisplay                             = 0x5E78F0
 D3DDevice_Release                                    = 0x5E4E50

@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include <windows.h>
 
 #include "core/input.h"

@@ -11,6 +11,7 @@
 #include "app/app.h"
 #include "core/diag.h"
 #include "gpu/backend.h"
+#include "gpu/shaders.h"
 #include "gpu/texture.h"
 #include "gpu/vertex.h"
 #include "xdk/d3d8.h"
@@ -841,12 +842,133 @@ HLE_FASTCALL(D3DDevice_SetVertexShaderConstantNotInlineFast, 1) {
     return 0;
 }
 
+// Vertex program memory: Load writes instructions at a slot, Select runs the program that starts at one
+namespace {
+constexpr uint32_t kProgramSlots = 136;
+constexpr uint32_t kInstructionDwords = 4;
+constexpr uint32_t kLastInstruction = 1;  // bit 0 of an instruction's fourth dword
+constexpr uint32_t kVertexProgramType = 0x2078;
+constexpr uint32_t kInputRegisters = 16;
+
+// guest vertex shader object, the record a handle points at
+constexpr uint32_t kShaderInputs = 0x14;  // 16 inputs of {stream, offset, D3DVSDT type, unused}
+constexpr uint32_t kShaderInputBytes = 16;
+constexpr uint32_t kTypeNone = 0x02;  // D3DVSDT_NONE
+
+std::array<uint32_t, kProgramSlots * kInstructionDwords> g_program_memory{};
+std::map<uint64_t, std::shared_ptr<gpu::VertexShader>> g_selected;  // kept alive, the render thread keys by pointer
+
+// bytes of one D3DVSDT element: kind in the low nibble, count in the next
+uint32_t ElementBytes(uint32_t type) {
+    uint32_t kind = type & 15;
+    uint32_t count = (type >> 4) & 15;
+    if (kind == 0 || kind == 6) return 4;          // D3DCOLOR, packed 11:11:10
+    if (kind == 1 || kind == 5) return 2 * count;  // shorts
+    if (kind == 4) return count;                   // bytes
+    return 4 * count;                              // floats
+}
+
+void StoreProgram(uint32_t slot, const std::vector<uint32_t>& words) {
+    if (slot >= kProgramSlots) return;
+    size_t room = g_program_memory.size() - slot * kInstructionDwords;
+    std::copy_n(words.begin(), std::min(words.size(), room), g_program_memory.begin() + slot * kInstructionDwords);
+}
+
+// a {type | count << 16, instructions} function's instructions
+std::vector<uint32_t> FunctionWords(uint32_t function) {
+    uint32_t count = R32(function) >> 16;
+    std::vector<uint32_t> words(count * kInstructionDwords);
+    for (uint32_t i = 0; i < words.size(); i++) words[i] = R32(function + 4 + i * 4);
+    return words;
+}
+
+// the instructions from slot to the last one
+std::vector<uint32_t> ProgramAt(uint32_t slot) {
+    std::vector<uint32_t> program;
+    for (; slot < kProgramSlots; slot++) {
+        const uint32_t* insn = &g_program_memory[slot * kInstructionDwords];
+        program.insert(program.end(), insn, insn + kInstructionDwords);
+        if (insn[3] & kLastInstruction) break;
+    }
+    return program;
+}
+
+// a guest made shader's inputs, as its object holds them
+void ApplyGuestInputs(uint32_t handle, gpu::VertexShader& vs) {
+    uint32_t inputs = (handle & ~1u) + kShaderInputs;
+    for (uint32_t reg = 0; reg < kInputRegisters; reg++) {
+        uint32_t entry = inputs + reg * kShaderInputBytes;
+        uint32_t stream = R32(entry);
+        uint32_t offset = R32(entry + 4);
+        uint32_t type = R32(entry + 8);
+        if (type == kTypeNone || stream >= vs.stream_stride.size()) continue;
+        vs.inputs[reg] = {int(stream), offset, type};
+        uint32_t end = offset + ElementBytes(type);
+        vs.stream_stride[stream] = std::max(vs.stream_stride[stream], end);
+    }
+}
+
+// the vertex inputs a selected program reads: a host made shader's, else the guest object's
+void ApplyShaderInputs(uint32_t handle, gpu::VertexShader& vs) {
+    auto it = g_vs.find(handle);
+    if (it == g_vs.end()) {
+        ApplyGuestInputs(handle, vs);
+        return;
+    }
+    vs.inputs = it->second->inputs;
+    vs.stream_stride = it->second->stream_stride;
+}
+
+// one shader object per program and input layout; handle 0 keeps the bound shader's inputs
+std::shared_ptr<gpu::VertexShader> SelectedShader(uint32_t handle, uint32_t slot) {
+    gpu::VertexShader vs;
+    vs.program = ProgramAt(slot);
+    vs.program_type = kVertexProgramType;
+    if (handle) {
+        ApplyShaderInputs(handle, vs);
+    } else {
+        vs.inputs = g_state.vs->inputs;
+        vs.stream_stride = g_state.vs->stream_stride;
+    }
+    uint64_t key = gpu::Hash(vs.program.data(), vs.program.size() * 4);
+    key = gpu::Hash(vs.inputs.data(), sizeof(vs.inputs), key);
+    key = gpu::Hash(vs.stream_stride.data(), sizeof(vs.stream_stride), key);
+    auto& kept = g_selected[key];
+    if (!kept) kept = std::make_shared<gpu::VertexShader>(std::move(vs));
+    return kept;
+}
+}  // namespace
+
+// (handle, slot): the program a shader was made with, stored at the slot
 HLE_STDCALL(D3DDevice_LoadVertexShader, 2) {
-    LOG_FIRST(4, "d3d: LoadVertexShader %08X at %u is not supported", a[0], a[1]);
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    auto it = g_vs.find(a[0]);
+    if (it == g_vs.end()) {
+        LOG_FIRST(8, "d3d: LoadVertexShader with unknown handle %08X", a[0]);
+        return 0;
+    }
+    StoreProgram(a[1], it->second->program);
     return 0;
 }
+
+// (function, slot)
+HLE_STDCALL(D3DDevice_LoadVertexShaderProgram, 2) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    StoreProgram(a[1], FunctionWords(a[0]));
+    return 0;
+}
+
+// (handle, slot): the program at the slot runs with the handle's inputs; handle 0 only moves the start
 HLE_STDCALL(D3DDevice_SelectVertexShader, 2) {
-    LOG_FIRST(4, "d3d: SelectVertexShader %08X at %u is not supported", a[0], a[1]);
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    uint32_t handle = a[0];
+    bool program_bound = (g_state.vs_handle & 1) && g_state.vs;
+    if (!handle && !program_bound) {
+        LOG_FIRST(8, "d3d: SelectVertexShader at slot %u without a bound vertex shader", a[1]);
+        return 0;
+    }
+    g_state.vs = SelectedShader(handle, a[1]);
+    if (handle) g_state.vs_handle = handle;
     return 0;
 }
 HLE_STDCALL(D3DDevice_SetShaderConstantMode, 1) {
