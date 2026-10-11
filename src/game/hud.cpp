@@ -13,12 +13,15 @@ using namespace kernel;
 
 namespace {
 
-// UI widget
+// UI widget, told apart by its Draw
 constexpr uint32_t kWidgetVtable = 0x00;
-constexpr uint32_t kImageVtable = 0x6CE048;
+constexpr uint32_t kVtableDraw = 0x04;
+constexpr uint32_t kImageDraw = 0x3581E0;
 constexpr uint32_t kImageWidth = 0x28;   // share of the screen
 constexpr uint32_t kImageScale = 0x4C;
 constexpr uint32_t kImagePivotX = 0x50;  // share of the width left of the position
+constexpr uint32_t kMeterDraw = 0x399B20;
+constexpr uint32_t kMeterWidth = 0x94;  // the whole bar, the fill is drawn inside it
 
 // Im2D vertex: x, y, z, rhw, colour, u, v
 constexpr uint32_t kVertexStride = 0x1C;
@@ -37,9 +40,11 @@ struct Span {
     float right;
 };
 
-// screen shares; only images have a width
+// screen shares; images and bars have a width
 Span WidgetSpan(uint32_t widget, float x) {
-    if (R32(widget + kWidgetVtable) != kImageVtable) return {x, x};
+    uint32_t draw = R32(R32(widget + kWidgetVtable) + kVtableDraw);
+    if (draw == kMeterDraw) return {x, x + G<float>(widget + kMeterWidth)};
+    if (draw != kImageDraw) return {x, x};
     float width = G<float>(widget + kImageWidth) * G<float>(widget + kImageScale);
     float left = x - G<float>(widget + kImagePivotX) * width;
     return {left, left + width};
