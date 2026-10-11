@@ -1067,6 +1067,8 @@ HLE_STDCALL(D3DDevice_SetPixelShaderConstant, 3) {
 
 HLE_STDCALL(D3DDevice_DrawVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
+    // constants the title pushed before the draw
+    Walk(Dev(kDevPush));
     SyncDeferred();
     if (g_backend) g_backend->Draw(g_state, a[0], a[1], a[2], nullptr);
     return 0;
@@ -1074,6 +1076,7 @@ HLE_STDCALL(D3DDevice_DrawVertices, 3) {
 
 HLE_STDCALL(D3DDevice_DrawIndexedVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
+    Walk(Dev(kDevPush));
     SyncDeferred();
     const uint8_t* indices = a[2] ? static_cast<const uint8_t*>(HostPtr(a[2])) : nullptr;
     if (g_backend) g_backend->Draw(g_state, a[0], 0, a[1], indices);
@@ -1217,7 +1220,35 @@ bool ApplyImmediate(uint32_t m, uint32_t v) {
     return true;
 }
 
-// reads the commands pushed since the last call: vertex data between a begin and an end is drawn, the rest is skipped
+// Vertex constants a title pushes itself, as 0x4652D0 does for a skinned mesh's ambient and material colour:
+// a load register, then four dwords per register from it on
+constexpr uint32_t kConstantLoad = 0x1EA4;
+constexpr uint32_t kConstantData = 0x0B80;
+constexpr uint32_t kConstantDataEnd = 0x0C00;
+constexpr uint32_t kConstantRegisters = 192;
+uint32_t g_constant_register = 0;
+uint32_t g_constant_component = 0;
+
+// a constant load or data method updates the vertex constants; false for any other method
+bool ApplyConstant(uint32_t m, uint32_t v) {
+    if (m == kConstantLoad) {
+        g_constant_register = v;
+        g_constant_component = 0;
+        return true;
+    }
+    if (m < kConstantData || m >= kConstantDataEnd) return false;
+    if (g_constant_register < kConstantRegisters) {
+        std::memcpy(&g_state.vsc[g_constant_register][g_constant_component], &v, 4);
+    }
+    if (++g_constant_component == 4) {
+        g_constant_component = 0;
+        g_constant_register++;
+    }
+    return true;
+}
+
+// reads the commands pushed since the last call: vertex data between a begin and an end is drawn, constants are
+// stored, the rest is skipped
 void Walk(uint32_t end) {
     if (!g_walk || end < g_walk || end > g_scratch_push + g_scratch_size) return;
     for (uint32_t p = g_walk; p + 4 <= end;) {
@@ -1227,7 +1258,8 @@ void Walk(uint32_t end) {
         if ((head & 0xA0030003) || n * 4 > end - p) break;  // anything but a method header
         for (uint32_t i = 0; i < n; i++, p += 4) {
             uint32_t m = head & 0x40000000 ? method : method + i * 4;
-            ApplyImmediate(m, R32(p));
+            uint32_t v = R32(p);
+            if (!ApplyConstant(m, v)) ApplyImmediate(m, v);
         }
     }
     g_walk = end;
@@ -1237,6 +1269,7 @@ void Walk(uint32_t end) {
 
 HLE_STDCALL(D3DDevice_DrawVerticesUP, 4) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
+    Walk(Dev(kDevPush));
     DrawUp(a[0], a[1], HostPtr(a[2]), a[3]);
     return 0;
 }
@@ -1280,7 +1313,7 @@ HLE_STDCALL(D3DDevice_EndPush, 1) {
                 prim = v;
                 vertices.clear();
                 ApplyImmediate(m, v);
-            } else if (!ApplyImmediate(m, v) && m >> 2 < g_state.simple.size()) {
+            } else if (!ApplyConstant(m, v) && !ApplyImmediate(m, v) && m >> 2 < g_state.simple.size()) {
                 g_state.simple[m >> 2] = v;
             }
         }
