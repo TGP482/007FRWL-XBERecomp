@@ -1927,16 +1927,30 @@ void D3D12Backend::BuildPipelineKey(const State& s, const Assembled& a, uint64_t
 // alpha test off: compare always, in Cmp() minus 1 terms like the enabled test
 constexpr float kAlphaTestAlways = float(D3D12_COMPARISON_FUNC_ALWAYS - 1);
 
+// D3DRS_FOGTABLEMODE values
+constexpr uint32_t kFogTableNone = 0;
+constexpr float kFogTableLinear = 3.0f;
+
+// table mode none under a vertex program: oFog is the blend factor, passed on as linear fog from 1 to 0
+void FillFogConstants(const State& s, bool vertex_program, DrawConstants& c) {
+    if (!s.rs[kRsFogEnable]) return;
+    if (vertex_program && s.rs[kRsFogTableMode] == kFogTableNone) {
+        c.fog[0] = 1.0f;
+        c.fog[1] = 0.0f;
+        c.fog[2] = 0.0f;
+        c.fog[3] = kFogTableLinear;
+        return;
+    }
+    c.fog[0] = Bits(s.rs[kRsFogStart]);
+    c.fog[1] = Bits(s.rs[kRsFogEnd]);
+    c.fog[2] = Bits(s.rs[kRsFogDensity]);
+    c.fog[3] = float(s.rs[kRsFogTableMode]);
+}
+
 void FillSurfaceConstants(const State& s, GuestExtent size, DrawConstants& c) {
     c.surf[0] = float(size.w);
     c.surf[1] = float(size.h);
     c.surf[2] = 1.0f / s.zscale;
-    if (s.rs[kRsFogEnable]) {
-        c.fog[0] = Bits(s.rs[kRsFogStart]);
-        c.fog[1] = Bits(s.rs[kRsFogEnd]);
-        c.fog[2] = Bits(s.rs[kRsFogDensity]);
-        c.fog[3] = float(s.rs[kRsFogTableMode]);
-    }
     Color(s.rs[kRsFogColor], c.fog_color);
     c.misc[0] = float(SimpleState(s, kMAlphaRef) & 0xFF);
     c.misc[1] = SimpleState(s, kMAlphaTestEnable) ? float(Cmp(SimpleState(s, kMAlphaFunc)) - 1) : kAlphaTestAlways;
@@ -2106,6 +2120,7 @@ void D3D12Backend::UploadConstants(const State& s, const DrawShaders& sh, const 
     std::memcpy(vc.cpu, s.vsc.data(), sizeof(s.vsc));
     Alloc dc = Upload(sizeof(DrawConstants), 256);
     FillSurfaceConstants(s, size, c);
+    FillFogConstants(s, sh.prog, c);
     FillCombinerConstants(s, c);
     if (ext_) ext_->Constants(reinterpret_cast<float(*)[4]>(vc.cpu), c.ext, bound_rt_, k.blend ? k.src : 1);
     FillTextureConstants(s, stages, c);
