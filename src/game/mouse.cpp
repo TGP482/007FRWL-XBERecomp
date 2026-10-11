@@ -22,7 +22,7 @@ constexpr float kRadiansPerDegree = 0.017453292f;
 constexpr float kRadiansPerCount = kDegreesPerCount * kRadiansPerDegree;
 
 // views that turn with the mouse, each takes its own share of the motion
-enum class View { Chase, Count };
+enum class View { Chase, Jetpack, Count };
 
 struct Share {
     input::MouseMove move{};
@@ -70,6 +70,13 @@ constexpr uint32_t kChasePitchStep = 0x14;
 
 input::MouseMove g_chase{};  // this update's motion
 
+// Jetpack update, ebx the jetpack state.
+
+constexpr uint32_t kJetpackPlayer = 0x4C;
+constexpr uint32_t kJetpackTurnStep = 0;  // from esp, pushed for the player's turn, radians
+constexpr uint32_t kLowByte = 0xFF;
+constexpr uint32_t kRightStickTurns = 1;  // cl: the right stick turns, the left only strafes
+
 }  // namespace
 
 // each chase camera update, before it turns
@@ -90,4 +97,15 @@ void ChasePitch(X86Context& ctx, uint8_t*) {
 
 void ChaseYaw(X86Context& ctx, uint8_t*) {
     G<float>(ctx.esp + kChaseYawStep) -= g_chase.dx * kRadiansPerCount;
+}
+
+// the jetpack picks its turn stick; on keyboard and mouse A and D strafe and the mouse turns
+void JetpackTurnStick(X86Context& ctx, uint8_t*) {
+    bool mouse = input::KeyboardActive() && OnPortZero(R32(ctx.ebx + kJetpackPlayer));
+    if (mouse) ctx.ecx = (ctx.ecx & ~kLowByte) | kRightStickTurns;
+}
+
+void JetpackTurn(X86Context& ctx, uint8_t*) {
+    input::MouseMove move = TakeForPlayer(View::Jetpack, R32(ctx.ebx + kJetpackPlayer));
+    G<float>(ctx.esp + kJetpackTurnStep) -= move.dx * kRadiansPerCount;
 }

@@ -305,6 +305,15 @@ at = 0xB5927
 call = "ChaseHoldsCentring"
 on_true = 0xB5976
 
+# jetpack: the stick that turns it, then the turn
+[[hook]]
+at = 0x127DE1
+call = "JetpackTurnStick"
+
+[[hook]]
+at = 0x127E40
+call = "JetpackTurn"
+
 # end of the frame render, after the HUD and before the frame is shown: the frame rate is drawn with the game text
 [[hook]]
 at = 0x34D094
