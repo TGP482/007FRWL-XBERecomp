@@ -108,6 +108,14 @@ constexpr size_t PanelActionIndex() {
 }
 constexpr size_t kPanelAction = PanelActionIndex();
 
+constexpr size_t PauseActionIndex() {
+    size_t i = 0;
+    while (kEntries[i].kind != Kind::Button || kEntries[i].index != kStart) i++;
+    return i;
+}
+constexpr size_t kPauseAction = PauseActionIndex();
+constexpr int kFirstPadButton = 8;  // ButtonKey's numbering: the analog buttons, then the pad buttons
+
 constexpr uint8_t kFullPress = 0xFF;
 constexpr int16_t kFullStick = 32767;
 constexpr uint64_t kCaptureGuardMs = 250;  // the panel key waits this long after a key capture poll
@@ -178,6 +186,18 @@ struct WheelStep {
     uint64_t until = 0;
 };
 WheelStep g_step;
+
+// the menu page's accept and cancel as tap bits, zero outside a page
+std::atomic<uint32_t> g_page_accept{0};
+std::atomic<uint32_t> g_page_cancel{0};
+
+// pad thread: the page keys in use, and Enter or a pause key held since they changed
+struct PageState {
+    uint32_t accept = 0;
+    uint32_t cancel = 0;
+    bool held = false;
+};
+PageState g_page;
 
 uint64_t NowMs() {
     auto since = std::chrono::steady_clock::now().time_since_epoch();
@@ -279,23 +299,65 @@ void Press(const Entry& entry, Pad& pad, StickKeys& sticks) {
     }
 }
 
+uint32_t TapBits(Tap tap) {
+    switch (tap) {
+        case Tap::Start:
+            return 1u << kStart;
+        case Tap::Back:
+            return 1u << kBack;
+        case Tap::Up:
+            return 1u << kDpadUp;
+        case Tap::Down:
+            return 1u << kDpadDown;
+        case Tap::Left:
+            return 1u << kDpadLeft;
+        case Tap::Right:
+            return 1u << kDpadRight;
+        case Tap::A:
+            return 1u << (kAnalogShift + kA);
+        case Tap::B:
+            return 1u << (kAnalogShift + kB);
+    }
+    return 0;
+}
+
+void ApplyBits(Pad& pad, uint32_t bits) {
+    pad.buttons |= uint16_t(bits);
+    for (int i = kA; i <= kRightTrigger; i++) {
+        if (bits >> (kAnalogShift + i) & 1) pad.analog[i] = kFullPress;
+    }
+}
+
 bool AnyKeyDown(const std::vector<int>& keys) {
     return std::any_of(keys.begin(), keys.end(), [](int vk) { return !IsMouseButton(vk) && Down(vk); });
 }
 
 // the look keys act in play only, where the arrows are not the dpad; in a menu the mouse buttons are the cursor's
+// and the pause keys the page's cancel
 void PressBoundKeys(const Binds& binds, bool play, Pad& pad, StickKeys& sticks) {
     bool cursor = !play && g_menu;
+    bool page = g_page.cancel || g_page.held;
     for (size_t i = 0; i < kCount; i++) {
-        bool blocked = kEntries[i].kind == Kind::Look && !play;
+        bool blocked = (kEntries[i].kind == Kind::Look && !play) || (i == kPauseAction && page);
         bool down = cursor ? AnyKeyDown(binds[i]) : AnyDown(binds[i]);
         if (!blocked && down) Press(kEntries[i], pad, sticks);
     }
 }
 
-// not bindable, and only out of play: the arrows are the dpad, Enter accepts, Backspace backs out
-void PressMenuKeys(Pad& pad) {
-    if (Down(VK_RETURN)) pad.analog[kA] = kFullPress;
+// a change of page keys waits for Enter and the pause keys to be let go, so the press that opened or closed a page
+// does not act on the next
+void LatchPageKeys(const Binds& binds) {
+    uint32_t accept = g_page_accept;
+    uint32_t cancel = g_page_cancel;
+    if (accept != g_page.accept || cancel != g_page.cancel) g_page = {accept, cancel, true};
+    if (!Down(VK_RETURN) && !AnyDown(binds[kPauseAction])) g_page.held = false;
+}
+
+// not bindable, and only out of play: the arrows are the dpad, Enter accepts, Backspace backs out; on a menu page
+// Enter and the pause keys are the page's own accept and cancel
+void PressMenuKeys(const Binds& binds, Pad& pad) {
+    if (Down(VK_RETURN) && !g_page.held) ApplyBits(pad, g_page.accept ? g_page.accept : TapBits(Tap::A));
+    if (g_page.cancel && !g_page.held && AnyDown(binds[kPauseAction])) ApplyBits(pad, g_page.cancel);
     if (Down(VK_BACK)) pad.analog[kB] = kFullPress;
     for (size_t i = 0; i < std::size(kArrows); i++) {
         int bit = kDpadUp + int(i);
@@ -361,35 +423,8 @@ void AddMenuWheel(const RAWMOUSE& mouse) {
     g_wheel += SHORT(mouse.usButtonData) > 0 ? 1 : -1;
 }
 
-uint32_t TapBits(Tap tap) {
-    switch (tap) {
-        case Tap::Start:
-            return 1u << kStart;
-        case Tap::Back:
-            return 1u << kBack;
-        case Tap::Up:
-            return 1u << kDpadUp;
-        case Tap::Down:
-            return 1u << kDpadDown;
-        case Tap::Left:
-            return 1u << kDpadLeft;
-        case Tap::Right:
-            return 1u << kDpadRight;
-        case Tap::A:
-            return 1u << (kAnalogShift + kA);
-        case Tap::B:
-            return 1u << (kAnalogShift + kB);
-    }
-    return 0;
-}
-
 void PressTap(Pad& pad) {
-    if (NowMs() >= g_press_until) return;
-    uint32_t bits = g_press;
-    pad.buttons |= uint16_t(bits);
-    for (int i = kA; i <= kRightTrigger; i++) {
-        if (bits >> (kAnalogShift + i) & 1) pad.analog[i] = kFullPress;
-    }
+    if (NowMs() < g_press_until) ApplyBits(pad, g_press);
 }
 
 void PressWheel(Pad& pad) {
@@ -460,9 +495,10 @@ void Keyboard(Pad& pad) {
     bool play = Play();
     if (!play) ClipCursor(nullptr);
     if (!g_menu) g_wheel = 0;
+    LatchPageKeys(binds);
     StickKeys sticks;
     PressBoundKeys(binds, play, pad, sticks);
-    if (!play) PressMenuKeys(pad);
+    if (!play) PressMenuKeys(binds, pad);
     if (!play) PressTap(pad);
     if (!play && g_menu) PressWheel(pad);
     if (play && NowMs() < g_tap_until) pad.buttons |= g_tap;
@@ -515,6 +551,22 @@ std::optional<Pointer> Cursor() {
 void Press(Tap tap) {
     g_press = TapBits(tap);
     g_press_until = NowMs() + kTapMs;
+}
+
+void SetPageKeys(std::optional<PageKeys> keys) {
+    g_page_accept = keys ? TapBits(keys->accept) : 0;
+    g_page_cancel = keys ? TapBits(keys->cancel) : 0;
+}
+
+std::string ButtonKey(int button) {
+    std::lock_guard lock(g_bind_lock);
+    for (size_t i = 0; i < kCount; i++) {
+        const Entry& entry = kEntries[i];
+        bool analog = entry.kind == Kind::Analog && entry.index == button;
+        bool pad = entry.kind == Kind::Button && entry.index + kFirstPadButton == button;
+        if ((analog || pad) && !g_binds[i].empty()) return NameOf(g_binds[i].front());
+    }
+    return {};
 }
 
 std::span<const Action> Actions() {

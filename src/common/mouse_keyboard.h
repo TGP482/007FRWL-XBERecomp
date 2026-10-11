@@ -54,4 +54,15 @@ std::optional<Pointer> Cursor();  // none while it is not shown
 enum class Tap { Start, Back, Up, Down, Left, Right, A, B };
 void Press(Tap tap);
 
+// a menu page's own accept and cancel: Enter gives the one, the pause keys the other
+struct PageKeys {
+    Tap accept;
+    Tap cancel;
+};
+void SetPageKeys(std::optional<PageKeys> keys);  // game thread, each tick; none outside a menu page
+
+// the first key bound to a pad button as the panel names it, empty for none: 0 to 7 A B X Y black white and the
+// triggers, 8 to 15 dpad up down left right, start, back, the thumbs
+std::string ButtonKey(int button);
+
 }  // namespace input

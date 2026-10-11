@@ -12,9 +12,11 @@
 
 #include "common/aspect.h"
 #include "common/mouse_keyboard.h"
+#include "game/flash.h"
 #include "xdk/hle.h"
 
 using namespace kernel;
+using namespace flash;
 
 namespace {
 
@@ -53,39 +55,11 @@ constexpr uint32_t kCodeCancel = 7;
 constexpr uint32_t kKeyboardPort = 0;
 
 // Flash player
-constexpr uint32_t kPlayer = 0x812560;
-constexpr uint32_t kPlayerLevels = 0x28;
 constexpr uint32_t kStageWidth = 0x7626E8;  // float: the stage is drawn across the 640x480 screen
 constexpr uint32_t kStageHeight = 0x7626EC;
 constexpr uint32_t kClipBox = 0x2FF5A3;  // thiscall(float[4] out): min x, min y, max x, max y in its parent
 
-// clip
-constexpr uint32_t kClipFlags = 0x04;   // type from bit 25, bit 4 set while it lives
-constexpr uint32_t kClipName = 0x08;    // string
-constexpr uint32_t kClipMatrix = 0x0C;  // a b c d tx ty
-constexpr uint32_t kClipParent = 0x44;
-constexpr uint32_t kClipData = 0x48;
-constexpr uint32_t kClipNext = 0x50;
-constexpr uint32_t kClipDepth = 0x54;  // low 17 bits, signed
-constexpr uint32_t kClipVisible = 0x58;
-constexpr uint32_t kVisibleBit = 0x100000;
-constexpr uint32_t kLiveBit = 0x10;
-constexpr uint32_t kTypeShift = 25;
-constexpr uint32_t kTypeSprite = 0x0D;
-constexpr uint32_t kTypeMovie = 0x12;
-constexpr uint32_t kStringText = 0x08;
-constexpr uint32_t kNoData = 0xBAADF00D;
-
-// sprite data
-constexpr uint32_t kSpriteCharacter = 0x0C;
-constexpr uint32_t kSpriteFrame = 0x18;
-constexpr uint32_t kSpriteChildren = 0x24;  // list: its head's next is the first child
-
-// sprite character: frames of {item count, items}, each item a pointer to {type, ...}
-constexpr uint32_t kCharacterFrameCount = 0x08;
-constexpr uint32_t kCharacterFrames = 0x0C;
-constexpr uint32_t kFrameSize = 8;
-constexpr uint32_t kFrameItems = 0x04;
+// frame item: a label is {type, text}
 constexpr uint32_t kItemLabelText = 0x04;
 constexpr uint32_t kItemFrameLabel = 2;
 
@@ -102,7 +76,6 @@ constexpr const char* kFocusLabels[] = {"active", "default"};
 
 constexpr int kSearchDepth = 3;
 constexpr size_t kMaxSearch = 256;
-constexpr size_t kMaxSiblings = 512;
 constexpr uint32_t kMaxItems = 64;
 constexpr uint32_t kMaxFrameItems = 256;
 constexpr uint32_t kMaxFrames = 4096;
@@ -151,10 +124,6 @@ uint64_t NowMs() {
     auto since = std::chrono::steady_clock::now().time_since_epoch();
     return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(since).count());
 }
-
-bool Readable(uint32_t va) { return va && va != kNoData && mem::IsCommitted(va); }
-
-const char* Text(uint32_t va) { return static_cast<const char*>(HostPtr(va)); }
 
 // the screen that gets port 0's input code, when one would get it
 uint32_t ReceiverOf(uint32_t code) {
@@ -207,50 +176,6 @@ input::Tap TapFor(uint32_t code, input::Tap fallback) {
 
 // clips
 
-uint32_t Type(uint32_t clip) {
-    uint32_t flags = R32(clip + kClipFlags);
-    return flags & kLiveBit ? flags >> kTypeShift : 0;
-}
-
-int Depth(uint32_t clip) { return int32_t(R32(clip + kClipDepth) << 15) >> 15; }
-
-const char* Name(uint32_t clip) { return Text(R32(clip + kClipName) + kStringText); }
-
-uint32_t FirstChild(uint32_t clip) {
-    uint32_t type = Type(clip);
-    if (type != kTypeSprite && type != kTypeMovie) return 0;
-    uint32_t data = R32(clip + kClipData);
-    if (!Readable(data)) return 0;
-    uint32_t list = R32(data + kSpriteChildren);
-    uint32_t head = Readable(list) ? R32(list) : 0;
-    return Readable(head) ? R32(head + kClipNext) : 0;
-}
-
-std::vector<uint32_t> Children(uint32_t clip) {
-    std::vector<uint32_t> children;
-    for (uint32_t child = FirstChild(clip); child && children.size() < kMaxSiblings; child = R32(child + kClipNext)) {
-        children.push_back(child);
-    }
-    return children;
-}
-
-uint32_t Named(const std::vector<uint32_t>& clips, const std::string& name) {
-    for (uint32_t clip : clips) {
-        if (_stricmp(Name(clip), name.c_str()) == 0) return clip;
-    }
-    return 0;
-}
-
-uint32_t Level(int number) {
-    uint32_t player = R32(kPlayer);
-    uint32_t levels = player ? R32(player + kPlayerLevels) : 0;
-    uint32_t clip = levels ? R32(levels) : 0;
-    for (size_t i = 0; clip && i < kMaxSiblings; i++, clip = R32(clip + kClipNext)) {
-        if (Depth(clip) == number) return clip;
-    }
-    return 0;
-}
-
 // a target path as the player writes one: "_level2.text_mc", or "/text_mc" on level 0
 uint32_t Resolve(const std::string& path) {
     constexpr const char* kLevel = "_level";
@@ -265,7 +190,7 @@ uint32_t Resolve(const std::string& path) {
         start = path.find_first_not_of(kSeparators, start);
         if (start == std::string::npos) break;
         size_t end = path.find_first_of(kSeparators, start);
-        clip = Named(Children(clip), path.substr(start, end - start));
+        clip = Named(Children(clip), path.substr(start, end - start).c_str());
         start = end;
     }
     return clip;
@@ -287,11 +212,11 @@ const char* LabelIn(uint32_t frame) {
 }
 
 const char* FrameLabel(uint32_t clip) {
-    uint32_t data = Type(clip) == kTypeSprite ? R32(clip + kClipData) : 0;
-    uint32_t character = Readable(data) ? R32(data + kSpriteCharacter) : 0;
-    if (!Readable(character)) return nullptr;
+    uint32_t character = Character(clip);
+    if (!character) return nullptr;
+    uint32_t frame = R32(R32(clip + kClipData) + kSpriteFrame);
     uint32_t frames = R32(character + kCharacterFrames);
-    uint32_t last = std::min({R32(data + kSpriteFrame) + 1, R32(character + kCharacterFrameCount), kMaxFrames});
+    uint32_t last = std::min({frame + 1, R32(character + kCharacterFrameCount), kMaxFrames});
     const char* label = nullptr;
     for (uint32_t i = 0; Readable(frames) && i < last; i++) {
         if (const char* found = LabelIn(frames + i * kFrameSize)) label = found;
@@ -312,7 +237,7 @@ std::optional<std::vector<uint32_t>> NamedItems(const std::vector<uint32_t>& chi
     for (const ItemName& name : kItemNames) {
         std::vector<uint32_t> clips;
         for (uint32_t i = 0; i < count; i++) {
-            uint32_t clip = Named(children, name.prefix + std::to_string(i) + name.suffix);
+            uint32_t clip = Named(children, (name.prefix + std::to_string(i) + name.suffix).c_str());
             if (!clip) break;
             clips.push_back(clip);
         }
@@ -380,11 +305,11 @@ std::optional<Box> StageBox(X86Context& ctx, uint32_t clip) {
     Box box = G<Box>(out);
     if (box.right < box.left || box.bottom < box.top) return std::nullopt;
     Point corners[] = {{box.left, box.top}, {box.right, box.top}, {box.left, box.bottom}, {box.right, box.bottom}};
-    bool shown = R32(clip + kClipVisible) & kVisibleBit;
+    bool shown = Shown(clip);
     uint32_t parent = R32(clip + kClipParent);
     for (int i = 0; parent && i < kMaxParents; i++, parent = R32(parent + kClipParent)) {
         for (Point& corner : corners) corner = Transform(parent, corner);
-        shown = shown && (R32(parent + kClipVisible) & kVisibleBit);
+        shown = shown && Shown(parent);
     }
     if (!shown) return std::nullopt;
     Box stage{corners[0].x, corners[0].y, corners[0].x, corners[0].y};
@@ -422,6 +347,11 @@ Point StagePoint(const input::Pointer& cursor) {
 
 // acting
 
+input::PageKeys KeysOf(uint32_t screen) {
+    input::Tap accept = TapFor(R32(screen + kScreenAccept), input::Tap::A);
+    return {accept, TapFor(R32(screen + kScreenCancel), input::Tap::B)};
+}
+
 void Focus(X86Context& ctx, uint32_t screen, uint32_t index) {
     if (index == R32(screen + kScreenFocus)) return;
     ctx.ecx = screen;
@@ -429,7 +359,7 @@ void Focus(X86Context& ctx, uint32_t screen, uint32_t index) {
 }
 
 void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
-    input::Tap accept = TapFor(R32(screen + kScreenAccept), input::Tap::A);
+    input::Tap accept = KeysOf(screen).accept;
     std::optional<Items> items = HasInputHandler(screen) ? std::nullopt : FindItems(screen);
     // a page with nothing to point at takes a click anywhere
     if (!items) {
@@ -465,11 +395,12 @@ void UpdateMenu(uint32_t screen) {
 void UpdateCursor(X86Context& ctx) {
     uint32_t screen = MenuScreen();
     UpdateMenu(screen);
+    input::SetPageKeys(screen ? std::optional(KeysOf(screen)) : std::nullopt);
     std::optional<input::Pointer> cursor = screen ? input::Cursor() : std::nullopt;
     if (!cursor) return;
     Edges edges = LatchEdges(screen, *cursor);
     if (!TakesInput(screen)) return;
-    if (edges.back) input::Press(TapFor(R32(screen + kScreenCancel), input::Tap::B));
+    if (edges.back) input::Press(KeysOf(screen).cancel);
     if (edges.moved || edges.click) ApplyPointer(ctx, screen, StagePoint(*cursor), edges);
 }
 

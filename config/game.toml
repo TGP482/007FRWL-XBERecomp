@@ -367,3 +367,8 @@ call = "MenuDrawEnd"
 [[hook]]
 at = 0x224BE2
 call = "MenuCursor"
+
+# frame tick, after the pads are read: the menus' button legends show the keys on keyboard and mouse
+[[hook]]
+at = 0x224BE2
+call = "MenuPrompts"
