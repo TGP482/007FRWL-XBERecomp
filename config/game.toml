@@ -87,6 +87,7 @@ D3DDevice_FlushVertexCache                           = 0x5E7020  # pushes method
 D3DDevice_GetBackBuffer2                             = 0x5E5D10
 D3DDevice_GetDepthStencilSurface2                    = 0x5E6450
 D3DDevice_GetRenderTarget2                           = 0x5E6430
+D3DDevice_GetTile                                    = 0x5E5050  # (index, D3DTILE*), copies device+0x1AC0 + index*24
 D3DDevice_GetVertexShaderFunction                    = 0x5E26A0
 D3DDevice_InsertFence                                = 0x5E5270
 D3DDevice_IsFencePending                             = 0x5E0A20

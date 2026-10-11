@@ -1326,6 +1326,36 @@ HLE_STDCALL(D3DDevice_EndPush, 1) {
 // frame buffer compression tiles are the console's memory controller's business
 HLE_STDCALL(D3DDevice_SetTile, 2) { return 0; }
 
+// D3DTILE: flags, memory, size, pitch, z start tag, z offset
+constexpr uint32_t kTileMemory = 4;
+constexpr uint32_t kTileSize = 8;
+constexpr uint32_t kTilePitch = 12;
+constexpr uint32_t kTileBytes = 24;
+// tiles the library's CreateDevice sets
+constexpr uint32_t kBackBufferTile = 0;
+constexpr uint32_t kDepthTile = 1;
+// surface header fields
+constexpr uint32_t kSurfaceData = 4;
+constexpr uint32_t kSurfaceSize = 16;
+
+// (index, tile): the frame buffer memory a title wraps in its own textures, as 0x3B1DD2 does for a depth texture
+HLE_STDCALL(D3DDevice_GetTile, 2) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    uint32_t tile = a[1];
+    std::memset(HostPtr(tile), 0, kTileBytes);
+    uint32_t surface = 0;
+    if (a[0] == kBackBufferTile) surface = g_buffers[1];
+    if (a[0] == kDepthTile) surface = g_depth;
+    if (!surface) return 0;
+    uint32_t size = R32(surface + kSurfaceSize);
+    uint32_t pitch = ((size >> 24 & 0xFF) + 1) * 64;
+    uint32_t height = (size >> 12 & 0xFFF) + 1;
+    W32(tile + kTileMemory, mem::VirtualFromPhysical(R32(surface + kSurfaceData)));
+    W32(tile + kTileSize, pitch * height);
+    W32(tile + kTilePitch, pitch);
+    return 0;
+}
+
 // the library's Begin pushes the start of the primitive, here it is opened
 HLE_STDCALL(D3DDevice_Begin, 1) {
     XDK_REQUIRE("d3d", XDK_KEY(CDevice_Flags));
