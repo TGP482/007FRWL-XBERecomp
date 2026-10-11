@@ -133,6 +133,7 @@ const app::GameInfo app::kGame = {
     .options = {                            // game settings kept in the settings file
         {"invert_mouse", &game::Opt().invert_mouse, nullptr},
         {"skip_intros", &game::Opt().skip_intros, nullptr},
+        {"fps_counter", &game::Opt().fps_counter, nullptr},
     },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it

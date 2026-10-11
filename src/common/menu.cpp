@@ -230,6 +230,12 @@ std::string StepMaxFps(Settings& s, int step) {
     return cap ? std::to_string(cap) : "UNLIMITED";
 }
 
+std::string StepFpsCounter(Settings&, int step) {
+    bool& on = game::Opt().fps_counter;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
 std::string StepAniso(Settings& s, int step) { return kAnisoNames[StepTable(kAnisoValues, s.aniso, step)]; }
 
 // The rows. A null text is a section heading, held rows wait for Apply.
@@ -248,6 +254,7 @@ constexpr Row kRows[] = {
     {"RENDER RESOLUTION", StepRenderResolution, false},
     {"VERTICAL SYNC", StepVsync, false},
     {"MAX FRAME RATE", StepMaxFps, false},
+    {"FPS COUNTER", StepFpsCounter, false},
     {"GRAPHICS", nullptr, false},
     {"ANISOTROPIC FILTERING", StepAniso, false},
 };
@@ -502,7 +509,9 @@ void DrawBindRows() {
 void RestoreDefaults(int page) {
     CancelCapture();
     if (page == 0) {
-        game::Opt().skip_intros = game::Options{}.skip_intros;
+        const game::Options defaults;
+        game::Opt().skip_intros = defaults.skip_intros;
+        game::Opt().fps_counter = defaults.fps_counter;
         RestoreSettingsDefaults();
     } else {
         const game::Options defaults;
@@ -650,7 +659,8 @@ void UpdateCursorFlag(ImGuiIO& io) {
     }
 }
 
-void DrawUi(double /*fps*/) {
+void DrawUi(double fps) {
+    game::g_fps = float(fps);
     ImGuiIO& io = ImGui::GetIO();
     UpdateCursorFlag(io);
     io.KeyRepeatRate = kRepeatSeconds;
