@@ -444,11 +444,12 @@ HLE_STDCALL(D3DDevice_SetGammaRamp, 2) {
 
 // targets and presentation
 
-HLE_STDCALL(D3DDevice_SetRenderTarget, 2) {
-    std::lock_guard<std::recursive_mutex> lock(g_lock);
-    uint32_t rt = a[0] ? a[0] : Dev(kDevRenderTarget), zs = a[1];
+namespace {
+// the device's targets become rt and zs, the references move from the old ones
+void ApplyRenderTarget(X86Context& ctx, uint32_t rt, uint32_t zs) {
     AddRef(ctx, rt);
-    uint32_t old_rt = Dev(kDevRenderTarget), old_zs = Dev(kDevDepth);
+    uint32_t old_rt = Dev(kDevRenderTarget);
+    uint32_t old_zs = Dev(kDevDepth);
     SetDev(kDevRenderTarget, rt);
     SetDev(kDevDepth, zs);
     AddRef(ctx, zs);
@@ -456,11 +457,25 @@ HLE_STDCALL(D3DDevice_SetRenderTarget, 2) {
     Release(ctx, old_zs);
     g_state.rt = SurfaceOf(rt);
     g_state.zs = SurfaceOf(zs);
+}
+}  // namespace
+
+HLE_STDCALL(D3DDevice_SetRenderTarget, 2) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    uint32_t rt = a[0] ? a[0] : Dev(kDevRenderTarget);
+    ApplyRenderTarget(ctx, rt, a[1]);
     // SetRenderTarget resets the viewport to the whole target
     uint32_t w, h;
     gpu::SurfaceSize(g_state.rt, w, h);
     g_state.viewport = {0, 0, w, h, 0.0f, 1.0f};
     UpdateViewportConstants();
+    return 0;
+}
+
+// (rt, zs, flags): the surfaces alone, the viewport stays as it was
+HLE_STDCALL(D3DDevice_SetRenderTargetFast, 3) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    ApplyRenderTarget(ctx, a[0], a[1]);
     return 0;
 }
 
