@@ -103,7 +103,7 @@ D3DDevice_SetGammaRamp                               = 0x5E49A0
 D3DDevice_SetIndices                                 = 0x5E6D60
 D3DDevice_SetLight                                   = 0x5E66A0
 D3DDevice_SetMaterial                                = 0x5E4CB0
-D3DDevice_SetPalette                                 = 0
+D3DDevice_SetPalette                                 = 0x5E6CD0  # stores device+0xF98 + stage*4, pushes 0x1B20
 D3DDevice_SetPixelShader                             = 0x5E8E80
 D3DDevice_SetPixelShaderConstant                     = 0x5E9080
 D3DDevice_SetRenderState_BackFillMode                = 0x5E3840
@@ -278,3 +278,8 @@ XPP_MemoryUnitType          = 0x682558
 # argument locations in API order for functions a link time code generated library compiled with another
 # convention: a register (eax ebx ecx edx esi edi ebp) or "stack" for the next stack slot, which the callee pops
 [abi]
+
+# chase camera update, after the stick x is squared: mouse look adds to the stick
+[[hook]]
+at = 0xB47ED
+call = "MouseLook"

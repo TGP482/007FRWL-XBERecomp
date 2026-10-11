@@ -379,6 +379,18 @@ struct ShrinkOptions {
 };
 
 // a draw's four texture stages: BindStageTexturesAndTargets fills them, the constants, views and samplers read them
+// TexInfo flag bit 0, an extension's bit, free while none is installed
+constexpr uint8_t kTexAtlasClamp = 1;
+
+// stage 0 of a kTexAtlasClamp draw sampled again inside the bounds UploadConstants puts in ext
+struct AtlasHooks final : ShaderHooks {
+    std::string Fetched(const TexInfo& t, int i) const override {
+        if (i != 0 || !(t.flags & kTexAtlasClamp)) return {};
+        return "t0 = tex0.Sample(smp0, clamp(tc0.xy / tc0.w, ext.xy, ext.zw) + texsize[0].zw);\n";
+    }
+};
+const AtlasHooks kAtlasHooks;
+
 struct DrawTextures {
     TexInfo info[4];
     D3D12_SHADER_RESOURCE_VIEW_DESC sv[4];
@@ -386,6 +398,7 @@ struct DrawTextures {
     bool rt[4] = {};            // stage samples a render target
     float k[4] = {1, 1, 1, 1};  // Extension::Sample's k
     float wide[4] = {};         // host texels per console texel of a target read into a smaller one, 0 otherwise
+    float atlas[4] = {};        // kTexAtlasClamp: stage 0's sample bounds, u and v low then high
 };
 
 // a draw's shaders: what they are made from, their cache keys, the hashes Compile returned and the compiled blobs
@@ -498,6 +511,7 @@ private:
     bool BindTargets(const State& s);
     void EnsureVertexShader(const State& s, const Assembled& a, DrawShaders& sh);
     bool BindStageTexturesAndTargets(const State& s, DrawTextures& stages);
+    void ApplyAtlasClamp(const State& s, const Assembled& a, DrawTextures& stages);
     ID3D12Resource* BindTexture(const State& s, int stage, DrawTextures& stages);
     ID3D12Resource* BindTargetTexture(const State& s, int stage, const TextureDesc& d, Target& t, bool box,
                                       DrawTextures& stages);
@@ -521,6 +535,7 @@ private:
     void CaptureTextures(const State& s, const DrawTextures& stages);
     void EndDrawCapture(const State& s, const Assembled& a, uint32_t count, const DrawConstants& c);
     void CaptureInputs(const State& s, const Assembled& a, const DrawConstants& c);
+    void CaptureRawInputs(const Assembled& a);
     void CaptureShaders(const State& s, const Assembled& a, const DrawShaders& sh, const PixelKey& pk);
     void CaptureShader(const char* kind, uint64_t key, const std::string& src);
     void SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages);
@@ -710,6 +725,7 @@ private:
 };
 
 bool D3D12Backend::Init(uint32_t width, uint32_t height) {
+    if (!g_shader_hooks) g_shader_hooks = &kAtlasHooks;
     guest_w_ = width;
     guest_h_ = height;
     HWND hwnd = static_cast<HWND>(app::Window());
@@ -2123,6 +2139,7 @@ void D3D12Backend::UploadConstants(const State& s, const DrawShaders& sh, const 
     FillFogConstants(s, sh.prog, c);
     FillCombinerConstants(s, c);
     if (ext_) ext_->Constants(reinterpret_cast<float(*)[4]>(vc.cpu), c.ext, bound_rt_, k.blend ? k.src : 1);
+    if (stages.info[0].flags & kTexAtlasClamp) std::memcpy(c.ext, stages.atlas, sizeof(c.ext));
     FillTextureConstants(s, stages, c);
     if (sh.fixed_transform) {
         FillTransformConstants(s, size, c);
@@ -2160,6 +2177,7 @@ void D3D12Backend::CaptureInputs(const State& s, const Assembled& a, const DrawC
         for (uint32_t k = 0; k < n * 4; k++) fprintf(cap_, " %g", a.vertices[v * n * 4 + k]);
         fprintf(cap_, " ]");
     }
+    if (a.vertices.empty()) CaptureRawInputs(a);
     for (int r = 0; r < kVsConstants; r++) {
         const auto& v = s.vsc[r];
         if (v[0] || v[1] || v[2] || v[3]) {
@@ -2181,7 +2199,42 @@ void D3D12Backend::CaptureDraw(const State& s, uint32_t prim, uint32_t count, co
             cap_i_++, s.rt.data, bound_ds_ ? s.zs.data : 0, prim, count, s.vs_handle, s.ps ? s.ps->handle : 0, k.blend,
             k.src, k.dst, k.zen, k.zfunc, k.zwrite, k.zbias, k.zslope, k.cull, k.wmask, c.pc[0][0], c.pc[0][1],
             c.pc[0][2], c.pc[0][3]);
+    fprintf(cap_, " fog %.0f %g %g %.3f %.3f %.3f", c.fog[3], c.fog[0], c.fog[1], c.fog_color[0], c.fog_color[1],
+            c.fog_color[2]);
     CaptureTextures(s, stages);
+}
+
+// floats in a DXGI vertex format, 0 for any other
+uint32_t FloatCount(uint8_t format) {
+    switch (format) {
+        case DXGI_FORMAT_R32_FLOAT: return 1;
+        case DXGI_FORMAT_R32G32_FLOAT: return 2;
+        case DXGI_FORMAT_R32G32B32_FLOAT: return 3;
+        case DXGI_FORMAT_R32G32B32A32_FLOAT: return 4;
+        default: return 0;
+    }
+}
+
+// a draw read straight from the title's buffers: the float inputs of its first vertices, by register
+void D3D12Backend::CaptureRawInputs(const Assembled& a) {
+    uint32_t shown = std::min<uint32_t>(a.vertex_count, kQuadVertices);
+    for (int r = 0; r < 16; r++) {
+        const VertexElement& e = a.elements[size_t(r)];
+        uint32_t floats = FloatCount(e.format);
+        if (!(a.regs >> r & 1) || !floats) continue;
+        const VertexBuffer& vb = a.buffers[e.buffer];
+        if (!vb.src || !vb.stride) continue;
+        fprintf(cap_, "\n     v%d", r);
+        for (uint32_t v = 0; v < shown; v++) {
+            uint64_t at = uint64_t(v) * vb.stride + e.offset;
+            if (at + floats * 4 > vb.bytes) break;
+            float x[4];
+            std::memcpy(x, vb.src + at, floats * 4);
+            fprintf(cap_, " [");
+            for (uint32_t k = 0; k < floats; k++) fprintf(cap_, " %g", x[k]);
+            fprintf(cap_, " ]");
+        }
+    }
 }
 
 // small draws: their inputs and constants; then ends the draw's line
@@ -2237,6 +2290,58 @@ bool UnitTexcoords(const Assembled& a) {
         any = true;
     }
     return any;
+}
+
+// The float2 input's bounds when a small direct draw has exactly one and stage 0 reads it as it is: the part of the
+// texture the draw shows, a sprite of a sheet for HUD and menu pieces
+bool TexcoordBounds(const State& s, const Assembled& a, float lo[2], float hi[2]) {
+    constexpr float kLo = -1e-4f;
+    constexpr float kHi = 1.0001f;
+    constexpr uint32_t kSmallDrawVertices = 4096;
+    const auto& stage = s.tss[0];
+    if (stage[kTssTexCoordIndex] || stage[kTssTextureTransformFlags]) return false;
+    if (!a.vertices.empty() || !a.vertex_count || a.vertex_count > kSmallDrawVertices) return false;
+    int found = -1;
+    for (int r = 0; r < 16; r++) {
+        if (!(a.regs >> r & 1) || a.elements[size_t(r)].format != DXGI_FORMAT_R32G32_FLOAT) continue;
+        if (found >= 0) return false;
+        found = r;
+    }
+    if (found < 0) return false;
+    const VertexElement& e = a.elements[size_t(found)];
+    const VertexBuffer& vb = a.buffers[e.buffer];
+    if (!vb.src || !vb.stride || uint64_t(a.vertex_count) * vb.stride > vb.bytes) return false;
+    lo[0] = lo[1] = kHi;
+    hi[0] = hi[1] = kLo;
+    for (uint32_t v = 0; v < a.vertex_count; v++) {
+        float uv[2];
+        std::memcpy(uv, vb.src + size_t(v) * vb.stride + e.offset, sizeof(uv));
+        for (int i = 0; i < 2; i++) {
+            if (!(uv[i] >= kLo && uv[i] <= kHi)) return false;
+            lo[i] = std::min(lo[i], uv[i]);
+            hi[i] = std::max(hi[i], uv[i]);
+        }
+    }
+    return true;
+}
+
+// The console's pixel centres keep a sprite's samples about half a texel inside its part of the sheet. Upscaled,
+// edge pixels sample nearer the part's border and blend in the next sprite: thin lines along HUD and menu pieces.
+// Stage 0 is clamped half a texel inside the part instead.
+void D3D12Backend::ApplyAtlasClamp(const State& s, const Assembled& a, DrawTextures& stages) {
+    TexInfo& info = stages.info[0];
+    if (ext_ || info.kind != kTex2D || info.rect || info.shadow || (info.flags & kTexWide)) return;
+    TextureDesc d;
+    if (!s.textures[0] || !Describe(s.textures[0], d) || !d.width || !d.height) return;
+    float lo[2];
+    float hi[2];
+    if (!TexcoordBounds(s, a, lo, hi)) return;
+    float half[2] = {0.5f / float(d.width), 0.5f / float(d.height)};
+    for (int i = 0; i < 2; i++) {
+        stages.atlas[i] = lo[i] + half[i];
+        stages.atlas[2 + i] = std::max(hi[i] - half[i], stages.atlas[i]);
+    }
+    info.flags |= kTexAtlasClamp;
 }
 
 // a stage without a texture gets a null view of its kind; the samplers read the views after
@@ -2360,6 +2465,7 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     // stage textures, then the pixel shader made for them
     DrawTextures stages;
     if (!BindStageTexturesAndTargets(s, stages)) return;
+    ApplyAtlasClamp(s, a, stages);
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
     sh.pkey = Hash(&pk, sizeof(pk));
