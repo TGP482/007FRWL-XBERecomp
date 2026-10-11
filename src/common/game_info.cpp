@@ -130,7 +130,10 @@ const app::GameInfo app::kGame = {
     .splash = L"splash",                    // optional splash.png or splash.bmp beside the exe
     .missing = L"Put the game in the assets folder: its disc image (.iso), or default.xbe with its folders beside it.",
     .images = {{"default.xbe", "007FRWL"}}, // each recompiled xbe and its exe, for title launches
-    .options = {{"invert_mouse", &game::Opt().invert_mouse, nullptr}},  // game settings kept in the settings file
+    .options = {                            // game settings kept in the settings file
+        {"invert_mouse", &game::Opt().invert_mouse, nullptr},
+        {"skip_intros", &game::Opt().skip_intros, nullptr},
+    },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it
     .init = input::LoadBindings,            // after the settings load, before the window and boot

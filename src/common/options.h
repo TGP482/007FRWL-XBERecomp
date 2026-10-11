@@ -6,6 +6,7 @@
 namespace game {
 
 struct Options {
+    bool skip_intros = false;
     bool invert_mouse = false;
     float mouse_sensitivity = 1.0f;
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default

@@ -430,6 +430,15 @@ void DrawMouseRows() {
     }
 }
 
+void DrawGeneralRows() {
+    game::Options& options = game::Opt();
+    DrawHeading("GENERAL");
+    if (OptionRow("SKIP INTROS", OnOff(options.skip_intros).c_str())) {
+        options.skip_intros = !options.skip_intros;
+        Save();
+    }
+}
+
 // Key bindings.
 
 std::string KeyText(std::string keys) {
@@ -493,6 +502,7 @@ void DrawBindRows() {
 void RestoreDefaults(int page) {
     CancelCapture();
     if (page == 0) {
+        game::Opt().skip_intros = game::Options{}.skip_intros;
         RestoreSettingsDefaults();
     } else {
         const game::Options defaults;
@@ -598,6 +608,7 @@ void DrawPanel() {
         ImGui::BeginChild("##rows", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
         if (g_page == 0) {
             for (const Row& row : kRows) DrawRow(row);
+            DrawGeneralRows();
         } else {
             DrawMouseRows();
             DrawBindRows();
