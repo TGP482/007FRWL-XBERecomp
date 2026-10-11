@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "common/aspect.h"
+#include "game/hud.h"
 #include "xdk/d3d8.h"
 #include "xdk/hle.h"
 
@@ -64,6 +65,8 @@ bool DrawsToScreen() {
 }
 
 }  // namespace
+
+void HudAnchorLeft(bool on) { g_anchor = on && game::Wide() ? kLeft : kOff; }
 
 // tree walk 0x3583B0, before a widget's Draw: esi the widget, [esp] its screen position
 void HudWidgetBegin(X86Context& ctx, uint8_t*) {

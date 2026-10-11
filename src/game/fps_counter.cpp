@@ -2,6 +2,7 @@
 #include <cstdio>
 
 #include "common/options.h"
+#include "game/hud.h"
 #include "xdk/hle.h"
 
 // Frame rate (top left), drawn by the game's own text manager, the one the HUD and menus use, over the finished frame.
@@ -87,9 +88,11 @@ void DrawFps(X86Context& ctx, uint8_t*) {
                     place.y - kShadowY * G<float>(manager + kManagerPageHeight)};
     uint32_t frame_ecx = ctx.ecx;
     CallGuest(ctx, kBeginUpdate, {cam});
+    HudAnchorLeft(true);
     ctx.ecx = manager;  // the text manager's calls are thiscall
     Show(ctx, kBlack, shadow, position, text);
     Show(ctx, kWhite, place, position, text);
     ctx.ecx = frame_ecx;
+    HudAnchorLeft(false);
     CallGuest(ctx, kEndUpdate, {cam});
 }
