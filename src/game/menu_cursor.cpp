@@ -345,19 +345,6 @@ std::optional<uint32_t> ItemAt(X86Context& ctx, const std::vector<uint32_t>& cli
 }
 
 // a row added past the clips is spaced as the options menu draws it, on from the first two items
-std::optional<uint32_t> AddedRowAt(X86Context& ctx, const std::vector<uint32_t>& clips, uint32_t count, Point point) {
-    if (clips.size() < 2 || count <= clips.size()) return std::nullopt;
-    std::optional<Box> first = StageBox(ctx, clips[0]);
-    std::optional<Box> second = StageBox(ctx, clips[1]);
-    if (!first || !second || point.x < first->left || point.x > first->right) return std::nullopt;
-    float step = second->top - first->top;
-    for (uint32_t i = uint32_t(clips.size()); i < count; i++) {
-        float shift = step * float(i);
-        if (point.y >= first->top + shift && point.y <= first->bottom + shift) return i;
-    }
-    return std::nullopt;
-}
-
 // the cursor on the stage; on a wide frame hud.cpp keeps the menus 4:3 in the middle
 Point StagePoint(const input::Pointer& cursor) {
     float x = cursor.x;
@@ -391,11 +378,11 @@ void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
     }
     Order order = LatchOrder(screen, *items);
     std::optional<uint32_t> hit = ItemAt(ctx, items->clips, stage);
-    uint32_t count = R32(screen + kScreenCount);
-    if (!hit && order == Order::Forward) hit = AddedRowAt(ctx, items->clips, count, stage);
     if (order == Order::Unknown || !hit) return;
     uint32_t last = uint32_t(items->clips.size()) - 1;
-    Focus(ctx, screen, order == Order::Reverse ? last - *hit : *hit);
+    uint32_t slot = order == Order::Reverse ? last - *hit : *hit;
+    bool options = OptionsMenuStockRows(screen) > 0;
+    Focus(ctx, screen, options ? uint32_t(OptionsMenuIndexAt(int(slot))) : slot);
     if (edges.click) input::Press(accept);
 }
 

@@ -305,6 +305,15 @@ at = 0xB5927
 call = "ChaseHoldsCentring"
 on_true = 0xB5976
 
+# chase camera following Bond's move: on keyboard and mouse it does not turn after him, unless camera centring is on
+[[hook]]
+at = 0xB51E4
+call = "ChaseTracking"
+
+[[hook]]
+at = 0xB530A
+call = "ChaseFollow"
+
 # jetpack: the stick that turns it, then the turn
 [[hook]]
 at = 0x127DE1

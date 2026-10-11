@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,6 +24,10 @@ namespace {
 // text line draw, thiscall(font, rect, scale, text, align, flags)
 constexpr uint32_t kDrawTextArg = 0x10;  // the text, from esp at the entry
 constexpr uint32_t kMaxText = 0x400;
+
+// clip box, thiscall(float[4] out): min x, min y, max x, max y in its parent
+constexpr uint32_t kClipBox = 0x2FF5A3;
+constexpr uint32_t kMatrixTx = kClipMatrix + 0x10;
 
 // frame item: a placement is {type, flags, depth, character id}
 constexpr uint32_t kItemPlace = 3;
@@ -108,6 +113,7 @@ struct LegendState {
     size_t visits = 0;
 };
 LegendState g_legends;
+std::map<uint32_t, float> g_moved;  // legend texts moved into their hidden picture's room, by their place before
 
 std::string PauseKey() {
     std::string name = input::ButtonKey(kStart);
@@ -186,28 +192,60 @@ void SetShown(uint32_t clip, bool shown) {
     W32(clip + kClipVisible, shown ? flags | kVisibleBit : flags & ~kVisibleBit);
 }
 
+float LeftOf(X86Context& ctx, uint32_t clip) {
+    static const uint32_t out = mem::AllocSystem(4 * sizeof(float));
+    uint32_t ecx = ctx.ecx;
+    ctx.ecx = clip;
+    CallGuest(ctx, kClipBox, {out});
+    ctx.ecx = ecx;
+    return G<float>(out);
+}
+
+// a text after the picture takes the picture's room while it is hidden, so the longer label keeps clear of the next
+void UpdateTextPlace(X86Context& ctx, uint32_t text, uint32_t picture, bool keyboard) {
+    float& x = G<float>(text + kMatrixTx);
+    auto moved = g_moved.find(text);
+    if (!keyboard) {
+        if (moved != g_moved.end()) x = moved->second;
+        return;
+    }
+    if (moved != g_moved.end() || !picture) return;
+    float room = LeftOf(ctx, text) - LeftOf(ctx, picture);
+    if (room <= 0.0f) return;
+    g_moved[text] = x;
+    x -= room;
+}
+
 // the picture goes while the keys are shown, the texts are kept to be relabelled as they are drawn
-void ApplyLegend(uint32_t clip, const Legend& legend, bool keyboard) {
-    for (uint32_t child : Children(clip)) {
-        if (Type(child) == kTypeSprite) SetShown(child, !keyboard);
+void ApplyLegend(X86Context& ctx, uint32_t clip, const Legend& legend, bool keyboard) {
+    std::vector<uint32_t> children = Children(clip);
+    uint32_t picture = 0;
+    for (uint32_t child : children) {
+        if (Type(child) == kTypeSprite) picture = child;
+    }
+    if (picture) SetShown(picture, !keyboard);
+    for (uint32_t child : children) {
         uint32_t field = EditTextField(child);
-        if (field && keyboard) g_legends.texts.push_back({ShownText(field), legend.buttons});
+        if (!field) continue;
+        UpdateTextPlace(ctx, child, picture, keyboard);
+        if (keyboard) g_legends.texts.push_back({ShownText(field), legend.buttons});
     }
 }
 
-void Visit(uint32_t clip, int depth, bool keyboard) {
+void Visit(X86Context& ctx, uint32_t clip, int depth, bool keyboard) {
     if (++g_legends.visits > kMaxVisits) return;
-    if (const Legend* legend = LegendOf(clip)) return ApplyLegend(clip, *legend, keyboard);
+    if (const Legend* legend = LegendOf(clip)) return ApplyLegend(ctx, clip, *legend, keyboard);
     if (depth >= kMaxTreeDepth) return;
-    for (uint32_t child : Children(clip)) Visit(child, depth + 1, keyboard);
+    for (uint32_t child : Children(clip)) Visit(ctx, child, depth + 1, keyboard);
 }
 
-void UpdateLegends() {
+void UpdateLegends(X86Context& ctx) {
     bool keyboard = input::KeyboardActive();
     g_legends.texts.clear();
     if (!keyboard && !g_legends.hidden) return;
     g_legends.visits = 0;
-    for (uint32_t level : Levels()) Visit(level, 0, keyboard);
+    for (uint32_t level : Levels()) Visit(ctx, level, 0, keyboard);
+    if (!keyboard) g_moved.clear();
     g_legends.hidden = keyboard;
 }
 
@@ -311,7 +349,11 @@ uint32_t WriteText(const std::string& text) {
 }  // namespace
 
 // frame tick, after the pads are read
-void MenuPrompts(X86Context&, uint8_t*) { UpdateLegends(); }
+void MenuPrompts(X86Context& ctx, uint8_t*) {
+    X86Context saved = ctx;
+    UpdateLegends(ctx);
+    ctx = saved;
+}
 
 // a line of text: drawn reworded
 X86_EXTERN_FUNC(__imp__sub_00357060);

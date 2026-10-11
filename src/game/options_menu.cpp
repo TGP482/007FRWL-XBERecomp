@@ -76,6 +76,8 @@ constexpr float kRepeat = 0.1f;
 
 // the stock rows' texts, in any order: the rows are ordered by their place on screen
 const char* const kFrontEndRows[] = {"$OPTIONS_BRIGHTNESS", "$OPTIONS_CREDITS", "$OPTIONS_NFS"};
+constexpr int kFrontEnd = 0;  // in kMenus
+constexpr int kNfsDemoLabel = 2;  // its native LaunchDemo (0x1B78A0) does nothing, the page would wait on it for good
 const char* const kPauseRows[] = {
     "$OPTIONS_VIBRATION",
     "$OPTIONS_INVERTHOR",
@@ -120,6 +122,7 @@ struct Sight {
     uint32_t labels = 0;
     std::array<Place, kMaxRows> place{};
     bool value = false;  // a field right of a label
+    std::array<std::array<std::string, kPartCount>, kMaxRows> text{};  // by the last frame's rows
 };
 
 // the stock rows of the last frame in screen order
@@ -130,6 +133,7 @@ struct Layout {
     std::array<int, kMaxRows> row_of{};  // the row of each label
     Place spacing{};
     bool value = false;
+    std::array<std::array<std::string, kPartCount>, kMaxRows> text{};  // each row's label and value as shown
 };
 
 // a stock row's text field as it is drawn
@@ -159,6 +163,7 @@ struct State {
     uint32_t screen = 0;
     int page = -1;  // the open page, -1 while the list shows
     int top = 0;    // the page row in the first slot
+    int list_top = 0;  // the list row in the first slot, past 0 once the cursor goes below the stock rows
     Repeat repeat;
     int missing = 0;  // frames the menu was not drawn
 };
@@ -175,19 +180,17 @@ bool PageOpen() { return g_state.page >= 0; }
 
 int CursorIndex() { return g_state.screen ? int(R32(g_state.screen + kScreenIndex)) : -1; }
 
-// slots for rows below the first stock row: the stock rows' and the entries'
-int Slots() { return g_layout.stock + kEntryCount; }
+// rows show in the stock rows' places, scrolling past them
+int Slots() { return g_layout.stock; }
 
 Place DrawnPlace() {
     uint32_t matrix = R32(R32(kRenderer) + kRendererMatrix);
     return {G<float>(matrix + kMatrixX), G<float>(matrix + kMatrixY)};
 }
 
-Place SlotPlace(int slot) {
-    Place first = g_layout.row[0];
-    float at = float(slot);
-    return {first.x + g_layout.spacing.x * at, first.y + g_layout.spacing.y * at};
-}
+Place SlotPlace(int slot) { return g_layout.row[size_t(std::clamp(slot, 0, g_layout.stock - 1))]; }
+
+bool ListScrolled() { return !PageOpen() && g_state.list_top > 0; }
 
 // Pages.
 
@@ -319,10 +322,14 @@ bool TakePageButton(X86Context& ctx, uint32_t code) {
 }
 
 // a button on the list: the entries open their page
+bool OnNfsDemo() { return g_layout.menu == kFrontEnd && CursorIndex() == g_layout.row_of[kNfsDemoLabel]; }
+
 bool TakeListButton(X86Context& ctx, uint32_t code) {
+    bool accept = code == R32(g_state.screen + kScreenAccept);
+    if (accept && OnNfsDemo()) return true;
     int entry = CursorIndex() - g_layout.stock;
     bool on_entry = entry >= 0 && entry < kEntryCount;
-    if (!on_entry || code != R32(g_state.screen + kScreenAccept)) return false;
+    if (!on_entry || !accept) return false;
     OpenPage(ctx, entry);
     return true;
 }
@@ -399,12 +406,22 @@ Layout MakeLayout(const Sight& sight) {
     layout.stock = menu.count;
     layout.spacing = {layout.row[1].x - layout.row[0].x, layout.row[1].y - layout.row[0].y};
     layout.value = sight.value;
+    layout.text = sight.text;
     return layout;
 }
 
 void Forget() {
     if (g_state.screen) LOG_FIRST(8, "options menu: closed");
     g_state = {};
+}
+
+// the list scrolls only when the cursor leaves the rows on show
+void UpdateListTop() {
+    int index = CursorIndex();
+    int& top = g_state.list_top;
+    if (PageOpen() || index < 0) return;
+    if (index < top) top = index;
+    if (index >= top + Slots()) top = index - Slots() + 1;
 }
 
 void UpdateScreen() {
@@ -417,6 +434,7 @@ void UpdateScreen() {
     if (!screen) return;
     int rows = WantedRows();
     if (int(R32(screen + kScreenRows)) != rows) SetRows(rows);
+    UpdateListTop();
 }
 
 // Seeing the stock rows.
@@ -474,6 +492,13 @@ void WriteCxform(const Cxform& from) {
     }
 }
 
+void LatchText(uint32_t data, const Field& field) {
+    uint32_t shown = R32(data + kFieldShown);
+    if (!shown) shown = R32(data + kFieldRaw);
+    const char* text = shown ? static_cast<const char*>(HostPtr(shown)) : "";
+    g_now.text[size_t(field.row)][field.part] = std::string(text, strnlen(text, kTextBytes));
+}
+
 void LatchLook(uint32_t data, const Field& field) {
     if (!g_state.screen || field.order >= kMaxFields) return;
     bool active = field.row == CursorIndex();
@@ -500,6 +525,7 @@ std::optional<Field> Observe(uint32_t data, Place place) {
     }
     if (field.row < 0) return std::nullopt;
     field.order = g_order[size_t(field.row)][field.part]++;
+    if (field.order == 0) LatchText(data, field);
     LatchLook(data, field);
     return field;
 }
@@ -581,34 +607,40 @@ void DrawCopy(X86Context& ctx, uint32_t field, const Field& seen, const Copy& co
     CxformSwap swap(look);
     Place to = SlotPlace(copy.slot);
     Place from = g_layout.row[size_t(seen.row)];
-    MatrixShift shift({to.x - from.x, to.y - from.y});
+    MatrixShift shift({0.0f, to.y - from.y});  // the rows share a column, centred texts keep their own x
     g_copying = true;
     CallGuest(ctx, kDrawField, {data, 0});
     g_copying = false;
 }
 
-void DrawEntries(X86Context& ctx, uint32_t field, const Field& seen) {
-    if (seen.part != kLabel) return;
+// the scrolled list: the stock rows' own texts moved up a slot each, then the entries
+std::string ListText(int row, Part part) {
+    if (row < g_layout.stock) return g_layout.text[size_t(row)][part];
+    return part == kLabel ? kEntries[row - g_layout.stock] : "";
+}
+
+void DrawList(X86Context& ctx, uint32_t field, const Field& seen) {
     int index = CursorIndex();
-    for (int e = 0; e < kEntryCount; e++) {
-        int slot = g_layout.stock + e;
-        DrawCopy(ctx, field, seen, {kEntries[e], slot, index == slot});
+    for (int slot = 0; slot < Slots(); slot++) {
+        int row = g_state.list_top + slot;
+        DrawCopy(ctx, field, seen, {ListText(row, seen.part), slot, index == row});
     }
 }
 
-// the value beside the label where the menu has a value column, else after it
-std::string PageText(int row, Part part) {
+// the value in the slot's own value box where the stock row there has one, else after the label
+std::string PageText(int row, int slot, Part part) {
+    bool box = !g_layout.text[size_t(slot)][kValue].empty();
     std::string value = RowValue(row);
-    if (part == kValue) return value;
+    if (part == kValue) return box ? value : "";
     std::string label = RowLabel(row);
-    if (g_layout.value || value.empty()) return label;
+    if (box || value.empty()) return label;
     return label + ": " + value;
 }
 
 void DrawPage(X86Context& ctx, uint32_t field, const Field& seen) {
     int index = CursorIndex();
     for (int slot = 0; slot < PageSlots(); slot++) {
-        std::string text = PageText(g_state.top + slot, seen.part);
+        std::string text = PageText(g_state.top + slot, slot, seen.part);
         DrawCopy(ctx, field, seen, {text, slot, index == slot});
     }
 }
@@ -617,8 +649,8 @@ void DrawCopies(X86Context& ctx, uint32_t field, const Field& seen) {
     if (!g_state.screen || seen.row != SourceRow()) return;
     if (PageOpen()) {
         DrawPage(ctx, field, seen);
-    } else {
-        DrawEntries(ctx, field, seen);
+    } else if (ListScrolled()) {
+        DrawList(ctx, field, seen);
     }
 }
 
@@ -642,6 +674,8 @@ int OptionsMenuStockRows(uint32_t screen) {
     return ours ? g_layout.stock : 0;
 }
 
+int OptionsMenuIndexAt(int slot) { return PageOpen() ? slot : g_state.list_top + slot; }
+
 // the Apt text field draw, cdecl (field, unused): a page hides the stock rows and draws its own
 X86_EXTERN_FUNC(__imp__sub_00413E50);
 X86_FUNC(sub_00413E50) {
@@ -649,7 +683,7 @@ X86_FUNC(sub_00413E50) {
     uint32_t data = R32(ctx.esp + 4);
     Place place = DrawnPlace();
     std::optional<Field> seen = Observe(data, place);
-    if (PageOpen() && InRows(place)) {
+    if ((PageOpen() || ListScrolled()) && InRows(place)) {
         Return(ctx, 0, 0);
     } else {
         __imp__sub_00413E50(ctx, base);

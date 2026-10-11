@@ -76,6 +76,11 @@ constexpr uint32_t kChaseStickEnabled = 0x5C;  // zero blocks the stick
 // the update's frame from esp: the turns it makes this frame, radians; the pitch is positive down
 constexpr uint32_t kChaseYawStep = 0x10;
 constexpr uint32_t kChasePitchStep = 0x14;
+// the turn after Bond's move: the view's change from his move, the turn about him in xmm0, then the eye's
+// pull toward its place in xmm1
+constexpr uint32_t kChaseMoveTurn = 0x10;
+constexpr int kChaseTurnReg = 0;
+constexpr int kChasePullReg = 1;
 
 input::MouseMove g_chase{};  // this update's motion
 
@@ -152,6 +157,22 @@ bool ChaseHoldsCentring(X86Context& ctx, uint8_t*) {
     return !game::Opt().camera_centring || Moved(g_chase);
 }
 
+// on keyboard and mouse with centring off the camera keeps its direction while Bond moves
+static bool HoldsDirection(uint32_t camera) {
+    if (game::Opt().camera_centring) return false;
+    return input::KeyboardActive() && OnPortZero(R32(camera + kChasePlayer));
+}
+
+// Bond moved and the view turned after him; the turn back undoes it, as the game does when focusing
+void ChaseTracking(X86Context& ctx, uint8_t*) {
+    if (HoldsDirection(ctx.esi)) ctx.xmm[kChaseTurnReg].f[0] = -G<float>(ctx.esp + kChaseMoveTurn);
+}
+
+// the eye trails its place and so turns the view after Bond; it takes its place at once
+void ChaseFollow(X86Context& ctx, uint8_t*) {
+    if (HoldsDirection(ctx.esi)) ctx.xmm[kChasePullReg].f[0] = 1.0f;
+}
+
 void ChasePitch(X86Context& ctx, uint8_t*) {
     G<float>(ctx.esp + kChasePitchStep) += g_chase.dy * kRadiansPerCount;
 }
@@ -179,7 +200,8 @@ void TurretAim(X86Context& ctx, uint8_t*) {
     input::MouseMove move = TakeForPlayer(View::Turret, R32(ctx.esi + kTurretPlayer));
     float seconds = G<float>(ctx.esp + kTurretSeconds);
     yaw = TurretInput(yaw, -move.dx * kRadiansPerCount, G<float>(ctx.esi + kTurretYawSpeed), seconds);
-    pitch = TurretInput(pitch, -move.dy * kRadiansPerCount, G<float>(ctx.esi + kTurretPitchSpeed), seconds);
+    // a positive pitch input lowers the turret
+    pitch = TurretInput(pitch, move.dy * kRadiansPerCount, G<float>(ctx.esi + kTurretPitchSpeed), seconds);
 }
 
 // the turret turned, its smoothing goes on from the stick alone
