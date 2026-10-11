@@ -138,6 +138,7 @@ const app::GameInfo app::kGame = {
     .images = {{"default.xbe", "007FRWL"}}, // each recompiled xbe and its exe, for title launches
     .options = {                            // game settings kept in the settings file
         {"invert_mouse", &game::Opt().invert_mouse, nullptr},
+        {"camera_centring", &game::Opt().camera_centring, nullptr},
         {"skip_intros", &game::Opt().skip_intros, nullptr},
         {"fps_counter", &game::Opt().fps_counter, nullptr},
     },

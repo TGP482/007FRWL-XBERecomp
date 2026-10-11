@@ -2,6 +2,7 @@
 #include <optional>
 
 #include "common/mouse_keyboard.h"
+#include "common/options.h"
 #include "xdk/hle.h"
 
 // Mouse look: the counts turn each view by an angle this frame, past the smoothing the game gives the stick.
@@ -77,9 +78,10 @@ void ChaseMouseTake(X86Context& ctx, uint8_t*) {
     if (R32(ctx.esi + kChaseStickEnabled) == 0) g_chase = {};
 }
 
-// no stick input this update, so the camera may swing back behind Bond; true holds it while the mouse moves
+// no stick input this update, so the camera may swing back behind Bond; true keeps it where the mouse left it
 bool ChaseHoldsCentring(X86Context& ctx, uint8_t*) {
-    return OnPortZero(R32(ctx.esi + kChasePlayer)) && Moved(g_chase);
+    if (!input::KeyboardActive() || !OnPortZero(R32(ctx.esi + kChasePlayer))) return false;
+    return !game::Opt().camera_centring || Moved(g_chase);
 }
 
 void ChasePitch(X86Context& ctx, uint8_t*) {

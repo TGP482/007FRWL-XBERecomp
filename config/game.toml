@@ -293,7 +293,8 @@ call = "ChasePitch"
 at = 0xB59B9
 call = "ChaseYaw"
 
-# chase camera with no stick input: mouse motion holds the yaw and pitch as the stick does
+# chase camera with no stick input: on keyboard and mouse the yaw and pitch stay where the mouse left them,
+# unless camera centring is on
 [[hook]]
 at = 0xB53F6
 call = "ChaseHoldsCentring"

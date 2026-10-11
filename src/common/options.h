@@ -10,6 +10,7 @@ struct Options {
     bool skip_intros = false;
     bool fps_counter = false;
     bool invert_mouse = false;
+    bool camera_centring = false;  // the chase camera swings back behind Bond on keyboard and mouse
     float mouse_sensitivity = 1.0f;
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };

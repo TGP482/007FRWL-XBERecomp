@@ -435,6 +435,10 @@ void DrawMouseRows() {
         options.invert_mouse = !options.invert_mouse;
         Save();
     }
+    if (OptionRow("CAMERA CENTRING", OnOff(options.camera_centring).c_str())) {
+        options.camera_centring = !options.camera_centring;
+        Save();
+    }
 }
 
 void DrawGeneralRows() {
@@ -518,6 +522,7 @@ void RestoreDefaults(int page) {
         game::Options& options = game::Opt();
         options.mouse_sensitivity = defaults.mouse_sensitivity;
         options.invert_mouse = defaults.invert_mouse;
+        options.camera_centring = defaults.camera_centring;
         input::ResetBindings();
     }
 }

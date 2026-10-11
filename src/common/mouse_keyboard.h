@@ -19,6 +19,7 @@ struct MouseMove {
     float dy;
 };
 std::optional<MouseMove> TakeMouse();  // game thread, each tick in play: asking is what marks play
+bool KeyboardActive();                 // the mouse moved after the controller's last new press
 
 // actions the keyboard can be bound to, key names comma separated
 struct Action {

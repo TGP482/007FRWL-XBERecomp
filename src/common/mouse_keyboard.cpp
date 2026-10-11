@@ -7,6 +7,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <iterator>
 #include <mutex>
 #include <vector>
@@ -112,6 +113,9 @@ constexpr uint64_t kCaptureGuardMs = 250;  // the panel key waits this long afte
 constexpr size_t kMaxKeysPerAction = 2;
 constexpr uint64_t kPlayMs = 250;  // play is the look hook asking for the mouse this recently
 constexpr uint64_t kTapMs = 80;    // a wheel notch holds its dpad press this long
+constexpr int kPadStickPress = 8000;  // a controller stick past this counts as a press
+constexpr uint8_t kPadAnalogPress = 30;  // a resting trigger may read a little above 0
+constexpr int kPadDigitalButtons = 8;   // Pad::buttons bits in use
 constexpr USHORT kUsagePageGeneric = 1;
 constexpr USHORT kUsageMouse = 2;
 constexpr uint16_t kWheelUp = 1 << kDpadUp;
@@ -155,6 +159,9 @@ std::atomic<bool> g_settle{false};
 std::atomic<int> g_dx{0};
 std::atomic<int> g_dy{0};
 std::atomic<uint64_t> g_take_ms{0};  // TakeMouse, asked every tick in play
+std::atomic<uint64_t> g_mouse_ms{0};  // the mouse last moved
+std::atomic<uint64_t> g_pad_ms{0};    // the controller last had a new press
+std::atomic<uint32_t> g_pad_held{0};
 std::atomic<uint16_t> g_tap{0};
 std::atomic<uint64_t> g_tap_until{0};
 std::atomic<uint64_t> g_capture_ms{0};
@@ -297,6 +304,23 @@ void SetSticks(Pad& pad, const StickKeys& sticks) {
     if (int y = Axis(sticks.look[kLookUp], sticks.look[kLookDown])) pad.ry = int16_t(y * kFullStick);
 }
 
+// only new presses count, so a drifting stick never takes over from the mouse
+void UpdatePadPress(const Pad& pad) {
+    uint32_t held = pad.buttons;
+    int bit = kPadDigitalButtons;
+    for (uint8_t analog : pad.analog) {
+        bool pressed = analog > kPadAnalogPress;
+        held |= uint32_t(pressed) << bit;
+        bit++;
+    }
+    for (int16_t axis : {pad.lx, pad.ly, pad.rx, pad.ry}) {
+        bool pressed = std::abs(int(axis)) > kPadStickPress;
+        held |= uint32_t(pressed) << bit;
+        bit++;
+    }
+    if (held & ~g_pad_held.exchange(held)) g_pad_ms = NowMs();
+}
+
 // the cursor stays inside the window while the mouse looks
 void ClipToWindow() {
     HWND hwnd = HWND(app::Window());
@@ -308,6 +332,7 @@ void ClipToWindow() {
 
 void AddMotion(const RAWMOUSE& mouse) {
     if (mouse.usFlags & MOUSE_MOVE_ABSOLUTE) return;
+    if (mouse.lLastX || mouse.lLastY) g_mouse_ms = NowMs();
     g_dx += mouse.lLastX;
     g_dy += mouse.lLastY;
 }
@@ -358,7 +383,10 @@ std::optional<MouseMove> TakeMouse() {
     return MouseMove{float(x) * options.mouse_sensitivity, float(y) * sign * options.mouse_sensitivity};
 }
 
+bool KeyboardActive() { return g_mouse_ms >= g_pad_ms; }
+
 void Keyboard(Pad& pad) {
+    UpdatePadPress(pad);  // the controller alone, before the keys are pressed into it
     if (!Active()) {
         g_settle = true;
         return;
