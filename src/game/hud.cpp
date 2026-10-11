@@ -1,6 +1,6 @@
 // 2D is laid out 640x480 and shown as wide as the output. Each widget the UI tree draws keeps its shape:
 // x' = x * narrow + anchor * spare width, anchored left, centre or right by where it sits on the screen.
-// The Flash menus stay 4:3 in the middle.
+// The Flash menus and films stay 4:3 in the middle.
 #include <cmath>
 #include <mutex>
 #include <vector>
@@ -76,6 +76,15 @@ void MenuDrawBegin(X86Context&, uint8_t*) {
 }
 
 void MenuDrawEnd(X86Context&, uint8_t*) { g_anchor = kOff; }
+
+// the film's quad over the frame, thiscall. Its own camera update, possibly inside the Flash render
+X86_EXTERN_FUNC(__imp__sub_00438370);
+X86_FUNC(sub_00438370) {
+    float outer = g_anchor;
+    if (game::Wide()) g_anchor = kCentre;
+    __imp__sub_00438370(ctx, base);
+    g_anchor = outer;
+}
 
 // Im2DRenderPrimitive(type, vertices, count), cdecl. Moved for the call and put back after
 X86_EXTERN_FUNC(__imp__sub_00278AB0);
