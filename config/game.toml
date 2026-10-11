@@ -288,3 +288,12 @@ call = "MouseLook"
 [[hook]]
 at = 0x34D094
 call = "DrawFps"
+
+# UI widget tree walk, around each widget's Draw: the HUD keeps its shape on widescreen
+[[hook]]
+at = 0x358423
+call = "HudWidgetBegin"
+
+[[hook]]
+at = 0x358426
+call = "HudWidgetEnd"
