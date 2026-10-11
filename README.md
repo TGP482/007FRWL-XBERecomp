@@ -29,6 +29,7 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 
 ### Miscellaneous
 - **Boot Splash** - Place a `splash.png` (or `.bmp`) beside the exe to display a splash screen at launch.
+- **Custom Menu Cursor** - Place a `cursor.png` beside the exe to replace the Windows arrow in the game's menus.
 
 ## System Requirements
 ### Minimum

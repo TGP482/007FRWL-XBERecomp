@@ -51,11 +51,12 @@ bool SwallowAltMenu(uintptr_t command, intptr_t* result) {
     return Take(result);
 }
 
-// the arrow over the panel and the game's menus, no cursor in play
+// the arrow over the panel, the menu cursor over the game's menus, no cursor in play
 bool ClientCursor(intptr_t lp, intptr_t* result) {
     if (LOWORD(lp) != HTCLIENT) return false;
     HCURSOR arrow = LoadCursorW(nullptr, MAKEINTRESOURCEW(kArrowCursorId));
-    SetCursor(app::MenuOpen() || input::CursorShown() ? arrow : nullptr);
+    HCURSOR menu = input::CursorShown() ? static_cast<HCURSOR>(app::CursorImage()) : nullptr;
+    SetCursor(app::MenuOpen() ? arrow : menu);
     *result = TRUE;
     return true;
 }
