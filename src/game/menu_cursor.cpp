@@ -13,6 +13,7 @@
 #include "common/aspect.h"
 #include "common/mouse_keyboard.h"
 #include "game/flash.h"
+#include "game/options_menu.h"
 #include "xdk/hle.h"
 
 using namespace kernel;
@@ -246,10 +247,17 @@ std::optional<std::vector<uint32_t>> NamedItems(const std::vector<uint32_t>& chi
     return std::nullopt;
 }
 
+// the item clips a page has
+uint32_t ClipCount(uint32_t screen) {
+    uint32_t count = R32(screen + kScreenCount);
+    uint32_t stock = uint32_t(OptionsMenuStockRows(screen));
+    return stock ? std::min(count, stock) : count;
+}
+
 // breadth first from the page's own clip
 std::optional<Items> FindItems(uint32_t screen) {
     uint32_t script = R32(screen + kScreenScript);
-    uint32_t count = R32(screen + kScreenCount);
+    uint32_t count = ClipCount(screen);
     uint32_t path = script ? R32(script + kScriptPath) : 0;
     if (count == 0 || count > kMaxItems || !Readable(path)) return std::nullopt;
     std::vector<uint32_t> parents{Resolve(Text(path))};
@@ -335,6 +343,20 @@ std::optional<uint32_t> ItemAt(X86Context& ctx, const std::vector<uint32_t>& cli
     return hit;
 }
 
+// a row added past the clips is spaced as the options menu draws it, on from the first two items
+std::optional<uint32_t> AddedRowAt(X86Context& ctx, const std::vector<uint32_t>& clips, uint32_t count, Point point) {
+    if (clips.size() < 2 || count <= clips.size()) return std::nullopt;
+    std::optional<Box> first = StageBox(ctx, clips[0]);
+    std::optional<Box> second = StageBox(ctx, clips[1]);
+    if (!first || !second || point.x < first->left || point.x > first->right) return std::nullopt;
+    float step = second->top - first->top;
+    for (uint32_t i = uint32_t(clips.size()); i < count; i++) {
+        float shift = step * float(i);
+        if (point.y >= first->top + shift && point.y <= first->bottom + shift) return i;
+    }
+    return std::nullopt;
+}
+
 // the cursor on the stage; on a wide frame hud.cpp keeps the menus 4:3 in the middle
 Point StagePoint(const input::Pointer& cursor) {
     float x = cursor.x;
@@ -368,6 +390,8 @@ void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
     }
     Order order = LatchOrder(screen, *items);
     std::optional<uint32_t> hit = ItemAt(ctx, items->clips, stage);
+    uint32_t count = R32(screen + kScreenCount);
+    if (!hit && order == Order::Forward) hit = AddedRowAt(ctx, items->clips, count, stage);
     if (order == Order::Unknown || !hit) return;
     uint32_t last = uint32_t(items->clips.size()) - 1;
     Focus(ctx, screen, order == Order::Reverse ? last - *hit : *hit);

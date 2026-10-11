@@ -372,3 +372,8 @@ call = "MenuCursor"
 [[hook]]
 at = 0x224BE2
 call = "MenuPrompts"
+
+# end of the frame render, once a frame: the options menu's rows of the next frame come from what this one drew
+[[hook]]
+at = 0x34D094
+call = "LatchOptionsMenu"

@@ -238,26 +238,108 @@ std::string StepFpsCounter(Settings&, int step) {
 
 std::string StepAniso(Settings& s, int step) { return kAnisoNames[StepTable(kAnisoValues, s.aniso, step)]; }
 
-// The rows. A null text is a section heading, held rows wait for Apply.
+std::string StepSkipIntros(Settings&, int step) {
+    bool& on = game::Opt().skip_intros;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
+std::string SensitivityText(int tenths) {
+    char text[16];
+    std::snprintf(text, sizeof(text), "%.1f", float(tenths) / kTenthsPerUnit);
+    return text;
+}
+
+std::string StepSensitivity(Settings&, int step) {
+    float& sensitivity = game::Opt().mouse_sensitivity;
+    int tenths = int(std::lround(sensitivity * kTenthsPerUnit));
+    if (step) {
+        int slot = std::clamp(tenths, 1, kSensitivitySlots) - 1;
+        tenths = StepIndex(slot, step, kSensitivitySlots) + 1;
+        sensitivity = float(tenths) / kTenthsPerUnit;
+    }
+    return SensitivityText(tenths);
+}
+
+std::string StepInvertLook(Settings&, int step) {
+    bool& on = game::Opt().invert_mouse;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
+std::string StepCameraCentring(Settings&, int step) {
+    bool& on = game::Opt().camera_centring;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
+// The rows, shared with the game's own options menu. A value row's id picks its step, held rows wait for Apply.
 using StepFn = std::string (*)(Settings& s, int step);
 
-struct Row {
-    const char* label;
-    StepFn text;
-    bool held;
+enum RowId {
+    kDisplayModeRow,
+    kResolutionRow,
+    kRenderResolutionRow,
+    kVsyncRow,
+    kMaxFpsRow,
+    kFpsCounterRow,
+    kAnisoRow,
+    kSkipIntrosRow,
+    kSensitivityRow,
+    kInvertLookRow,
+    kCameraCentringRow,
 };
 
-constexpr Row kRows[] = {
-    {"DISPLAY", nullptr, false},
-    {"DISPLAY MODE", StepDisplayMode, true},
-    {"RESOLUTION", StepResolution, true},
-    {"RENDER RESOLUTION", StepRenderResolution, false},
-    {"VERTICAL SYNC", StepVsync, false},
-    {"MAX FRAME RATE", StepMaxFps, false},
-    {"FPS COUNTER", StepFpsCounter, false},
-    {"GRAPHICS", nullptr, false},
-    {"ANISOTROPIC FILTERING", StepAniso, false},
+// in RowId order
+constexpr StepFn kSteps[] = {
+    StepDisplayMode,
+    StepResolution,
+    StepRenderResolution,
+    StepVsync,
+    StepMaxFps,
+    StepFpsCounter,
+    StepAniso,
+    StepSkipIntros,
+    StepSensitivity,
+    StepInvertLook,
+    StepCameraCentring,
 };
+
+bool Held(int id) { return id == kDisplayModeRow || id == kResolutionRow; }
+
+using rows::Kind;
+using rows::Row;
+
+constexpr Row kSettingsRows[] = {
+    {Kind::Heading, -1, "DISPLAY"},
+    {Kind::Value, kDisplayModeRow, "DISPLAY MODE"},
+    {Kind::Value, kResolutionRow, "RESOLUTION"},
+    {Kind::Value, kRenderResolutionRow, "RENDER RESOLUTION"},
+    {Kind::Value, kVsyncRow, "VERTICAL SYNC"},
+    {Kind::Value, kMaxFpsRow, "MAX FRAME RATE"},
+    {Kind::Value, kFpsCounterRow, "FPS COUNTER"},
+    {Kind::Heading, -1, "GRAPHICS"},
+    {Kind::Value, kAnisoRow, "ANISOTROPIC FILTERING"},
+    {Kind::Heading, -1, "GENERAL"},
+    {Kind::Value, kSkipIntrosRow, "SKIP INTROS"},
+};
+
+// the mouse rows, then a bind row for each input action
+const std::vector<Row>& InputRows() {
+    static const std::vector<Row> list = [] {
+        std::vector<Row> out = {
+            {Kind::Heading, -1, "MOUSE"},
+            {Kind::Value, kSensitivityRow, "MOUSE SENSITIVITY"},
+            {Kind::Value, kInvertLookRow, "INVERT LOOK"},
+            {Kind::Value, kCameraCentringRow, "CAMERA CENTRING"},
+            {Kind::Heading, -1, "KEYBOARD"},
+        };
+        std::span<const input::Action> actions = input::Actions();
+        for (size_t i = 0; i < actions.size(); i++) out.push_back({Kind::Bind, int(i), actions[i].label});
+        return out;
+    }();
+    return list;
+}
 
 bool SameDisplay(const Settings& a, const Settings& b) {
     return a.display_mode == b.display_mode && a.width == b.width && a.height == b.height;
@@ -270,14 +352,14 @@ void CopyDisplay(Settings& to, const Settings& from) {
 }
 
 void ApplyLiveStep(const Row& row, int step) {
-    row.text(Get(), step);
+    kSteps[row.id](Get(), step);
     Save();
 }
 
 void ApplyHeldStep(const Row& row, int step) {
     const Settings& live = Get();
     if (!g_display_held) CopyDisplay(g_display, live);
-    row.text(g_display, step);
+    kSteps[row.id](g_display, step);
     g_display_held = !SameDisplay(g_display, live);
 }
 
@@ -397,56 +479,15 @@ void DrawHeading(const char* title) {
     ImGui::Dummy(ImVec2(0, em * kHeadingAfterEms));
 }
 
-void DrawRow(const Row& row) {
-    if (!row.text) {
-        DrawHeading(row.label);
-        return;
-    }
-    bool pending = row.held && g_display_held;
-    Settings& shown = pending ? g_display : Get();
-    int step = OptionRow(row.label, row.text(shown, 0).c_str());
+void DrawValueRow(const Row& row) {
+    bool held = Held(row.id);
+    Settings& shown = held && g_display_held ? g_display : Get();
+    int step = OptionRow(row.label, kSteps[row.id](shown, 0).c_str());
     if (step == 0) return;
-    if (row.held) {
+    if (held) {
         ApplyHeldStep(row, step);
     } else {
         ApplyLiveStep(row, step);
-    }
-}
-
-// Mouse.
-
-std::string SensitivityText(int tenths) {
-    char text[16];
-    std::snprintf(text, sizeof(text), "%.1f", float(tenths) / kTenthsPerUnit);
-    return text;
-}
-
-void DrawMouseRows() {
-    game::Options& options = game::Opt();
-    DrawHeading("MOUSE");
-    int tenths = int(std::lround(options.mouse_sensitivity * kTenthsPerUnit));
-    int step = OptionRow("MOUSE SENSITIVITY", SensitivityText(tenths).c_str());
-    if (step) {
-        int slot = std::clamp(tenths, 1, kSensitivitySlots) - 1;
-        options.mouse_sensitivity = float(StepIndex(slot, step, kSensitivitySlots) + 1) / kTenthsPerUnit;
-        Save();
-    }
-    if (OptionRow("INVERT LOOK", OnOff(options.invert_mouse).c_str())) {
-        options.invert_mouse = !options.invert_mouse;
-        Save();
-    }
-    if (OptionRow("CAMERA CENTRING", OnOff(options.camera_centring).c_str())) {
-        options.camera_centring = !options.camera_centring;
-        Save();
-    }
-}
-
-void DrawGeneralRows() {
-    game::Options& options = game::Opt();
-    DrawHeading("GENERAL");
-    if (OptionRow("SKIP INTROS", OnOff(options.skip_intros).c_str())) {
-        options.skip_intros = !options.skip_intros;
-        Save();
     }
 }
 
@@ -499,14 +540,24 @@ bool BindRow(const char* label, const std::string& keys, bool capturing) {
     return pressed;
 }
 
-void DrawBindRows() {
-    DrawHeading("KEYBOARD");
-    std::span<const input::Action> actions = input::Actions();
-    for (size_t i = 0; i < actions.size(); i++) {
-        bool capturing = g_capture.action == int(i);
-        std::string keys = KeyText(input::Binding(i));
-        bool pressed = BindRow(actions[i].label, keys, capturing);
-        if (pressed && BindingSettled()) StartCapture(int(i));
+void DrawBindRow(const Row& row) {
+    bool capturing = g_capture.action == row.id;
+    std::string keys = KeyText(input::Binding(size_t(row.id)));
+    bool pressed = BindRow(row.label, keys, capturing);
+    if (pressed && BindingSettled()) StartCapture(row.id);
+}
+
+void DrawRow(const Row& row) {
+    switch (row.kind) {
+        case Kind::Heading:
+            DrawHeading(row.label);
+            break;
+        case Kind::Value:
+            DrawValueRow(row);
+            break;
+        case Kind::Bind:
+            DrawBindRow(row);
+            break;
     }
 }
 
@@ -620,13 +671,9 @@ void DrawPanel() {
         DrawTabs();
         float footer = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() + em;
         ImGui::BeginChild("##rows", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
-        if (g_page == 0) {
-            for (const Row& row : kRows) DrawRow(row);
-            DrawGeneralRows();
-        } else {
-            DrawMouseRows();
-            DrawBindRows();
-        }
+        size_t count = 0;
+        const Row* list = rows::Page(g_page, &count);
+        for (size_t i = 0; i < count; i++) DrawRow(list[i]);
         ImGui::EndChild();
         ImGui::Separator();
         DrawHint();
@@ -636,6 +683,28 @@ void DrawPanel() {
 }
 
 }  // namespace
+
+const rows::Row* rows::Page(int page, size_t* count) {
+    if (page == 0) {
+        *count = std::size(kSettingsRows);
+        return kSettingsRows;
+    }
+    *count = InputRows().size();
+    return InputRows().data();
+}
+
+// the game's menu applies a change at once, display rows too
+std::string rows::Value(const Row& row, int step) {
+    if (row.kind == Kind::Bind) return KeyText(input::Binding(size_t(row.id)));
+    if (row.kind != Kind::Value) return {};
+    std::string text = kSteps[row.id](Get(), step);
+    if (step == 0) return text;
+    if (Held(row.id)) ApplyDisplay();
+    Save();
+    return text;
+}
+
+void rows::Defaults(int page) { RestoreDefaults(page); }
 
 bool MenuOpen() { return g_open.load(std::memory_order_relaxed); }
 
