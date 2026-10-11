@@ -1036,6 +1036,50 @@ void EndPrimitive() {
     g_state.vs_handle = handle;
 }
 
+// a begin/end or vertex data method opens, feeds or draws the immediate primitive; false for any other method
+bool ApplyImmediate(uint32_t m, uint32_t v) {
+    float f;
+    float* a = g_im_attr;
+    bool last = true;  // the slot's last component
+    std::memcpy(&f, &v, 4);
+    if (m == 0x17FC) {  // begin/end, 0 ends
+        if (v) {
+            g_im_prim = v;
+            g_im_mask = 0;
+            g_im_vertices.clear();
+        } else {
+            EndPrimitive();
+        }
+        return true;
+    } else if (m >= 0x1880 && m < 0x1900) {  // 2 floats, z = 0 and w = 1
+        a += (m - 0x1880) / 8 * 4;
+        last = (m - 0x1880) / 4 & 1;
+        a[last] = f;
+        a[2] = 0;
+        a[3] = 1;
+    } else if (m >= 0x1940 && m < 0x1980) {  // 4 bytes
+        a += (m - 0x1940) / 4 * 4;
+        for (int c = 0; c < 4; c++) a[c] = (v >> c * 8 & 0xFF) / 255.0f;
+    } else if (m >= 0x1A00 && m < 0x1B00) {  // 4 floats
+        a += (m - 0x1A00) / 16 * 4;
+        last = ((m - 0x1A00) / 4 & 3) == 3;
+        a[(m - 0x1A00) / 4 & 3] = f;
+    } else if (m >= 0x1500 && m < 0x150C) {  // position, 3 floats and w = 1
+        last = m == 0x1508;
+        a[(m - 0x1500) / 4] = f;
+        a[3] = 1;
+    } else if (m >= 0x1518 && m < 0x1528) {  // position, 4 floats
+        last = m == 0x1524;
+        a[(m - 0x1518) / 4] = f;
+    } else {
+        return false;
+    }
+    if (!g_im_prim) return true;
+    g_im_mask |= 1u << (a - g_im_attr) / 4;
+    if (a == g_im_attr && last) g_im_vertices.insert(g_im_vertices.end(), g_im_attr, g_im_attr + 64);
+    return true;
+}
+
 // reads the commands pushed since the last call: vertex data between a begin and an end is drawn, the rest is skipped
 void Walk(uint32_t end) {
     if (!g_walk || end < g_walk || end > g_scratch_push + g_scratch_size) return;
@@ -1045,45 +1089,8 @@ void Walk(uint32_t end) {
         p += 4;
         if ((head & 0xA0030003) || n * 4 > end - p) break;  // anything but a method header
         for (uint32_t i = 0; i < n; i++, p += 4) {
-            uint32_t m = head & 0x40000000 ? method : method + i * 4, v = R32(p);
-            float f, *a = g_im_attr;
-            bool last = true;  // the slot's last component
-            std::memcpy(&f, &v, 4);
-            if (m == 0x17FC) {  // begin/end, 0 ends
-                if (v) {
-                    g_im_prim = v;
-                    g_im_mask = 0;
-                    g_im_vertices.clear();
-                } else {
-                    EndPrimitive();
-                }
-                continue;
-            } else if (m >= 0x1880 && m < 0x1900) {  // 2 floats, z = 0 and w = 1
-                a += (m - 0x1880) / 8 * 4;
-                last = (m - 0x1880) / 4 & 1;
-                a[last] = f;
-                a[2] = 0;
-                a[3] = 1;
-            } else if (m >= 0x1940 && m < 0x1980) {  // 4 bytes
-                a += (m - 0x1940) / 4 * 4;
-                for (int c = 0; c < 4; c++) a[c] = (v >> c * 8 & 0xFF) / 255.0f;
-            } else if (m >= 0x1A00 && m < 0x1B00) {  // 4 floats
-                a += (m - 0x1A00) / 16 * 4;
-                last = ((m - 0x1A00) / 4 & 3) == 3;
-                a[(m - 0x1A00) / 4 & 3] = f;
-            } else if (m >= 0x1500 && m < 0x150C) {  // position, 3 floats and w = 1
-                last = m == 0x1508;
-                a[(m - 0x1500) / 4] = f;
-                a[3] = 1;
-            } else if (m >= 0x1518 && m < 0x1528) {  // position, 4 floats
-                last = m == 0x1524;
-                a[(m - 0x1518) / 4] = f;
-            } else {
-                continue;
-            }
-            if (!g_im_prim) continue;
-            g_im_mask |= 1u << (a - g_im_attr) / 4;
-            if (a == g_im_attr && last) g_im_vertices.insert(g_im_vertices.end(), g_im_attr, g_im_attr + 64);
+            uint32_t m = head & 0x40000000 ? method : method + i * 4;
+            ApplyImmediate(m, R32(p));
         }
     }
     g_walk = end;
@@ -1098,11 +1105,20 @@ HLE_STDCALL(D3DDevice_DrawVerticesUP, 4) {
 }
 
 // BeginPush(dwords) hands out room for raw hardware commands, EndPush(end) runs what the title wrote there:
-// a primitive between two begin/end writes with its vertices inline, any other method as a simple state.
+// a primitive between two begin/end writes with its vertices inline or as vertex data, other methods as simple states.
 HLE_STDCALL(D3DDevice_BeginPush, 1) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     g_push_begin = ScratchPush(a[0] * 4);
     return g_push_begin;
+}
+
+// a primitive whose vertices came as an inline array, in the bound vertex format
+static void DrawInline(uint32_t prim, const std::vector<uint32_t>& vertices) {
+    if (vertices.empty()) return;
+    uint32_t stride = VertexBytes();
+    uint32_t bytes = uint32_t(vertices.size()) * 4;
+    if (stride && bytes % stride == 0) DrawUp(prim, bytes / stride, vertices.data(), stride);
+    else LOG_FIRST(8, "d3d: EndPush primitive %u dropped, %u bytes of vertices of %u", prim, bytes, stride);
 }
 
 HLE_STDCALL(D3DDevice_EndPush, 1) {
@@ -1122,16 +1138,13 @@ HLE_STDCALL(D3DDevice_EndPush, 1) {
             uint32_t m = head & 0x40000000 ? method : method + i * 4, v = R32(p);
             if (m == kInlineArray) {
                 if (prim) vertices.push_back(v);
-            } else if (m != kBeginEnd) {
-                if (m >> 2 < g_state.simple.size()) g_state.simple[m >> 2] = v;
-            } else if (v) {
+            } else if (m == kBeginEnd) {
+                if (!v && prim) DrawInline(prim, vertices);
                 prim = v;
                 vertices.clear();
-            } else if (prim) {
-                uint32_t stride = VertexBytes(), bytes = uint32_t(vertices.size()) * 4;
-                if (stride && bytes % stride == 0) DrawUp(prim, bytes / stride, vertices.data(), stride);
-                else LOG_FIRST(8, "d3d: EndPush primitive %u dropped, %u bytes of vertices of %u", prim, bytes, stride);
-                prim = 0;
+                ApplyImmediate(m, v);
+            } else if (!ApplyImmediate(m, v) && m >> 2 < g_state.simple.size()) {
+                g_state.simple[m >> 2] = v;
             }
         }
     }
