@@ -1,8 +1,10 @@
 // the options panel on F10
 #include <algorithm>
 #include <atomic>
-#include <cstddef>
 #include <cctype>
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -22,6 +24,7 @@
 #include "app/app.h"
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
+#include "common/options.h"
 
 namespace app {
 
@@ -83,6 +86,9 @@ const char* const kAnisoNames[] = {"GAME DEFAULT", "2x", "4x", "8x", "16x"};
 constexpr uint32_t kFpsCaps[] = {30, 60, 75, 90, 120, 144, 165, 240, 360, 0};
 const char* const kDisplayModeNames[] = {"FULLSCREEN", "BORDERLESS", "WINDOWED"};
 constexpr int kDisplayModeCount = int(std::size(kDisplayModeNames));
+
+constexpr int kSensitivitySlots = 50;  // 0.1 to 5.0 in tenths
+constexpr float kTenthsPerUnit = 10.0f;
 
 constexpr int kRenderMin = 20;
 constexpr int kRenderMax = 200;
@@ -400,6 +406,30 @@ void DrawRow(const Row& row) {
     }
 }
 
+// Mouse.
+
+std::string SensitivityText(int tenths) {
+    char text[16];
+    std::snprintf(text, sizeof(text), "%.1f", float(tenths) / kTenthsPerUnit);
+    return text;
+}
+
+void DrawMouseRows() {
+    game::Options& options = game::Opt();
+    DrawHeading("MOUSE");
+    int tenths = int(std::lround(options.mouse_sensitivity * kTenthsPerUnit));
+    int step = OptionRow("MOUSE SENSITIVITY", SensitivityText(tenths).c_str());
+    if (step) {
+        int slot = std::clamp(tenths, 1, kSensitivitySlots) - 1;
+        options.mouse_sensitivity = float(StepIndex(slot, step, kSensitivitySlots) + 1) / kTenthsPerUnit;
+        Save();
+    }
+    if (OptionRow("INVERT LOOK", OnOff(options.invert_mouse).c_str())) {
+        options.invert_mouse = !options.invert_mouse;
+        Save();
+    }
+}
+
 // Key bindings.
 
 std::string KeyText(std::string keys) {
@@ -465,6 +495,10 @@ void RestoreDefaults(int page) {
     if (page == 0) {
         RestoreSettingsDefaults();
     } else {
+        const game::Options defaults;
+        game::Options& options = game::Opt();
+        options.mouse_sensitivity = defaults.mouse_sensitivity;
+        options.invert_mouse = defaults.invert_mouse;
         input::ResetBindings();
     }
 }
@@ -565,6 +599,7 @@ void DrawPanel() {
         if (g_page == 0) {
             for (const Row& row : kRows) DrawRow(row);
         } else {
+            DrawMouseRows();
             DrawBindRows();
         }
         ImGui::EndChild();
@@ -591,7 +626,7 @@ void ToggleMenu() {
     g_open.store(!MenuOpen(), std::memory_order_relaxed);
     g_display_held = false;
     CancelCapture();
-    input::Settle();
+    input::ReleaseCursor();
     RefreshCursor();
 }
 

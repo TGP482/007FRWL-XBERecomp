@@ -1,14 +1,24 @@
 #pragma once
+#include <optional>
 #include <span>
 #include <string>
 
 #include "core/input.h"
 
-// the keyboard as the controller on port 0
+// the keyboard and mouse as the controller on port 0
 namespace input {
 
-void Settle();            // the game lost the input: held keys wait for release before they press again
-void Keyboard(Pad& pad);  // held keys onto port 0's pad
+void StartMouse(void* hwnd);    // window thread, the game window is up
+void OnRawInput(void* handle);  // window thread, WM_INPUT
+void ReleaseCursor();           // the game lost the input: the clip goes, held keys wait for release
+void Keyboard(Pad& pad);        // held keys onto port 0's pad
+
+// raw mouse counts since the last call, scaled by the settings; none when there is no motion
+struct MouseMove {
+    float dx;
+    float dy;
+};
+std::optional<MouseMove> TakeMouse();  // game thread, each tick in play: asking is what marks play
 
 // actions the keyboard can be bound to, key names comma separated
 struct Action {

@@ -6,6 +6,8 @@
 #endif
 #include <windows.h>
 
+#include <cmath>
+
 #include <toml++/toml.hpp>
 
 #include "app/app.h"
@@ -61,7 +63,10 @@ bool PanelCursor(intptr_t lp, intptr_t* result) {
 bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result) {
     switch (msg) {
         case WM_ACTIVATE:
-            if (LOWORD(wp) == WA_INACTIVE) input::Settle();
+            if (LOWORD(wp) == WA_INACTIVE) input::ReleaseCursor();
+            return false;
+        case WM_INPUT:
+            input::OnRawInput(reinterpret_cast<void*>(lp));
             return false;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
@@ -87,6 +92,9 @@ void Pad(int port, input::Pad& pad) {
 // what the options list cannot hold
 void Load(const void* table) {
     const toml::table& settings = *static_cast<const toml::table*>(table);
+    Options& options = Opt();
+    float sensitivity = float(settings["mouse_sensitivity"].value_or(double(options.mouse_sensitivity)));
+    if (std::isfinite(sensitivity)) options.mouse_sensitivity = sensitivity;
     const toml::table* keys = settings["keys"].as_table();
     if (!keys) return;
     for (auto&& [id, value] : *keys) {
@@ -95,9 +103,12 @@ void Load(const void* table) {
 }
 
 void Save(void* table) {
+    toml::table& settings = *static_cast<toml::table*>(table);
+    // thousandths, so the file reads 0.3 and not 0.30000001192092896
+    settings.insert("mouse_sensitivity", std::round(double(Opt().mouse_sensitivity) * 1000.0) / 1000.0);
     toml::table keys;
     for (const auto& [id, names] : Opt().keys) keys.insert(id, names);
-    static_cast<toml::table*>(table)->insert("keys", keys);
+    settings.insert("keys", keys);
 }
 
 }  // namespace
@@ -119,12 +130,12 @@ const app::GameInfo app::kGame = {
     .splash = L"splash",                    // optional splash.png or splash.bmp beside the exe
     .missing = L"Put the game in the assets folder: its disc image (.iso), or default.xbe with its folders beside it.",
     .images = {{"default.xbe", "007FRWL"}}, // each recompiled xbe and its exe, for title launches
-    .options = {},                          // game settings kept in the settings file
+    .options = {{"invert_mouse", &game::Opt().invert_mouse, nullptr}},  // game settings kept in the settings file
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it
     .init = input::LoadBindings,            // after the settings load, before the window and boot
     .loaded = nullptr,                      // image in memory, before its entry point runs
-    .window = nullptr,                      // the game window is up
+    .window = input::StartMouse,            // the game window is up
     .message = game::Message,               // window messages first; true takes one
     .ui = app::DrawUi,                      // ImGui drawing each frame
     .pad = game::Pad,                       // changes a polled pad

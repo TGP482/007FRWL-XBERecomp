@@ -1,4 +1,4 @@
-// the keyboard as the controller on port 0
+// the keyboard and mouse as the controller on port 0
 #include "common/mouse_keyboard.h"
 
 #include <algorithm>
@@ -55,7 +55,14 @@ enum Move {
     kRight,
     kMoveCount,
 };
-enum class Kind { Analog, Button, Move, Host };
+enum Look {
+    kLookUp,
+    kLookDown,
+    kLookLeft,
+    kLookRight,
+    kLookCount,
+};
+enum class Kind { Analog, Button, Move, Look, Host };
 
 struct Entry {
     Action action;
@@ -85,6 +92,10 @@ constexpr Entry kEntries[] = {
     {{"objectives", "OBJECTIVES", "Tab"}, Kind::Button, kBack},
     {{"pause", "PAUSE MENU", "Escape"}, Kind::Button, kStart},
     {{"settings_panel", "SETTINGS PANEL", "F10"}, Kind::Host, 0},
+    {{"look_up", "LOOK UP", "Up"}, Kind::Look, kLookUp},
+    {{"look_down", "LOOK DOWN", "Down"}, Kind::Look, kLookDown},
+    {{"look_left", "LOOK LEFT", "Left"}, Kind::Look, kLookLeft},
+    {{"look_right", "LOOK RIGHT", "Right"}, Kind::Look, kLookRight},
 };
 constexpr size_t kCount = std::size(kEntries);
 
@@ -99,6 +110,12 @@ constexpr uint8_t kFullPress = 0xFF;
 constexpr int16_t kFullStick = 32767;
 constexpr uint64_t kCaptureGuardMs = 250;  // the panel key waits this long after a key capture poll
 constexpr size_t kMaxKeysPerAction = 2;
+constexpr uint64_t kPlayMs = 250;  // play is the look hook asking for the mouse this recently
+constexpr uint64_t kTapMs = 80;    // a wheel notch holds its dpad press this long
+constexpr USHORT kUsagePageGeneric = 1;
+constexpr USHORT kUsageMouse = 2;
+constexpr uint16_t kWheelUp = 1 << kDpadUp;
+constexpr uint16_t kWheelDown = 1 << kDpadDown;
 constexpr int kFirstVk = 1;
 constexpr int kEndVk = 255;
 
@@ -111,7 +128,7 @@ constexpr Name kNames[] = {
     {VK_LBUTTON, "LMB"}, {VK_RBUTTON, "RMB"}, {VK_MBUTTON, "MMB"}, {VK_XBUTTON1, "Mouse4"}, {VK_XBUTTON2, "Mouse5"},
     {VK_SPACE, "Space"}, {VK_ESCAPE, "Escape"}, {VK_TAB, "Tab"}, {VK_SHIFT, "Shift"}, {VK_CONTROL, "Ctrl"},
     {VK_MENU, "Alt"}, {VK_CAPITAL, "CapsLock"}, {VK_INSERT, "Insert"}, {VK_DELETE, "Delete"}, {VK_HOME, "Home"},
-    {VK_END, "End"}, {VK_PRIOR, "PageUp"}, {VK_NEXT, "PageDown"},
+    {VK_END, "End"}, {VK_UP, "Up"}, {VK_DOWN, "Down"}, {VK_LEFT, "Left"}, {VK_RIGHT, "Right"}, {VK_PRIOR, "PageUp"}, {VK_NEXT, "PageDown"},
     {VK_NUMPAD0, "Numpad0"}, {VK_NUMPAD1, "Numpad1"}, {VK_NUMPAD2, "Numpad2"}, {VK_NUMPAD3, "Numpad3"},
     {VK_NUMPAD4, "Numpad4"}, {VK_NUMPAD5, "Numpad5"}, {VK_NUMPAD6, "Numpad6"}, {VK_NUMPAD7, "Numpad7"},
     {VK_NUMPAD8, "Numpad8"}, {VK_NUMPAD9, "Numpad9"}, {VK_ADD, "NumpadPlus"}, {VK_SUBTRACT, "NumpadMinus"},
@@ -126,11 +143,20 @@ constexpr int kLastFKey = 12;
 constexpr int kHostFKey = 3;
 
 using Binds = std::array<std::vector<int>, kCount>;
-using MoveKeys = std::array<bool, kMoveCount>;
+
+struct StickKeys {
+    std::array<bool, kMoveCount> move{};
+    std::array<bool, kLookCount> look{};
+};
 
 std::mutex g_bind_lock;
 Binds g_binds;
 std::atomic<bool> g_settle{false};
+std::atomic<int> g_dx{0};
+std::atomic<int> g_dy{0};
+std::atomic<uint64_t> g_take_ms{0};  // TakeMouse, asked every tick in play
+std::atomic<uint16_t> g_tap{0};
+std::atomic<uint64_t> g_tap_until{0};
 std::atomic<uint64_t> g_capture_ms{0};
 
 uint64_t NowMs() {
@@ -193,6 +219,8 @@ bool IsMouseButton(int vk) {
     return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
 }
 
+bool Play() { return NowMs() - g_take_ms < kPlayMs; }
+
 // the game window has the keyboard and the panel is closed
 bool Active() { return GetForegroundWindow() == app::Window() && !app::MenuOpen(); }
 
@@ -212,7 +240,7 @@ bool AnyPressingKeyDown(const Binds& binds) {
     return std::any_of(binds.begin(), binds.end(), [](const std::vector<int>& keys) { return AnyDown(keys); });
 }
 
-void Press(const Entry& entry, Pad& pad, MoveKeys& move) {
+void Press(const Entry& entry, Pad& pad, StickKeys& sticks) {
     switch (entry.kind) {
         case Kind::Analog:
             pad.analog[entry.index] = kFullPress;
@@ -221,20 +249,25 @@ void Press(const Entry& entry, Pad& pad, MoveKeys& move) {
             pad.buttons |= uint16_t(1u << entry.index);
             break;
         case Kind::Move:
-            move[size_t(entry.index)] = true;
+            sticks.move[size_t(entry.index)] = true;
+            break;
+        case Kind::Look:
+            sticks.look[size_t(entry.index)] = true;
             break;
         case Kind::Host:
             break;
     }
 }
 
-void PressBoundKeys(const Binds& binds, Pad& pad, MoveKeys& move) {
+// the look keys act in play only, where the arrows are not the dpad
+void PressBoundKeys(const Binds& binds, bool play, Pad& pad, StickKeys& sticks) {
     for (size_t i = 0; i < kCount; i++) {
-        if (AnyDown(binds[i])) Press(kEntries[i], pad, move);
+        bool blocked = kEntries[i].kind == Kind::Look && !play;
+        if (!blocked && AnyDown(binds[i])) Press(kEntries[i], pad, sticks);
     }
 }
 
-// not bindable: the arrows are the dpad, Enter accepts, Backspace backs out
+// not bindable, and only out of play: the arrows are the dpad, Enter accepts, Backspace backs out
 void PressMenuKeys(Pad& pad) {
     if (Down(VK_RETURN)) pad.analog[kA] = kFullPress;
     if (Down(VK_BACK)) pad.analog[kB] = kFullPress;
@@ -257,14 +290,73 @@ void AddKey(std::vector<int>& keys, int vk) {
 
 int Axis(bool positive, bool negative) { return int(positive) - int(negative); }
 
-void SetLeftStick(Pad& pad, const MoveKeys& move) {
-    if (int x = Axis(move[kRight], move[kLeft])) pad.lx = int16_t(x * kFullStick);
-    if (int y = Axis(move[kForward], move[kBackward])) pad.ly = int16_t(y * kFullStick);
+void SetSticks(Pad& pad, const StickKeys& sticks) {
+    if (int x = Axis(sticks.move[kRight], sticks.move[kLeft])) pad.lx = int16_t(x * kFullStick);
+    if (int y = Axis(sticks.move[kForward], sticks.move[kBackward])) pad.ly = int16_t(y * kFullStick);
+    if (int x = Axis(sticks.look[kLookRight], sticks.look[kLookLeft])) pad.rx = int16_t(x * kFullStick);
+    if (int y = Axis(sticks.look[kLookUp], sticks.look[kLookDown])) pad.ry = int16_t(y * kFullStick);
+}
+
+// the cursor stays inside the window while the mouse looks
+void ClipToWindow() {
+    HWND hwnd = HWND(app::Window());
+    RECT client, current;
+    GetClientRect(hwnd, &client);
+    MapWindowPoints(hwnd, nullptr, reinterpret_cast<POINT*>(&client), 2);
+    if (!GetClipCursor(&current) || !EqualRect(&client, &current)) ClipCursor(&client);
+}
+
+void AddMotion(const RAWMOUSE& mouse) {
+    if (mouse.usFlags & MOUSE_MOVE_ABSOLUTE) return;
+    g_dx += mouse.lLastX;
+    g_dy += mouse.lLastY;
+}
+
+// a wheel notch taps the dpad: sniper zoom, and the item select list
+void AddWheel(const RAWMOUSE& mouse) {
+    if (!(mouse.usButtonFlags & RI_MOUSE_WHEEL)) return;
+    bool up = SHORT(mouse.usButtonData) > 0;
+    g_tap = up ? kWheelUp : kWheelDown;
+    g_tap_until = NowMs() + kTapMs;
 }
 
 }  // namespace
 
-void Settle() { g_settle = true; }
+void StartMouse(void* hwnd) {
+    RAWINPUTDEVICE mouse{kUsagePageGeneric, kUsageMouse, 0, static_cast<HWND>(hwnd)};
+    RegisterRawInputDevices(&mouse, 1, sizeof(mouse));
+}
+
+void OnRawInput(void* handle) {
+    RAWINPUT raw;
+    UINT size = sizeof(raw);
+    UINT read = GetRawInputData(static_cast<HRAWINPUT>(handle), RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER));
+    if (read == UINT(-1) || raw.header.dwType != RIM_TYPEMOUSE || !Active()) return;
+    // the cursor is free outside play
+    if (!Play()) {
+        ClipCursor(nullptr);
+        return;
+    }
+    ClipToWindow();
+    AddMotion(raw.data.mouse);
+    AddWheel(raw.data.mouse);
+}
+
+void ReleaseCursor() {
+    ClipCursor(nullptr);
+    g_settle = true;
+}
+
+std::optional<MouseMove> TakeMouse() {
+    uint64_t now = NowMs();
+    bool was_idle = now - g_take_ms.exchange(now) >= kPlayMs;
+    int x = g_dx.exchange(0);
+    int y = g_dy.exchange(0);
+    if ((x == 0 && y == 0) || was_idle || !Active()) return std::nullopt;
+    const game::Options& options = game::Opt();
+    float sign = options.invert_mouse ? -1.0f : 1.0f;
+    return MouseMove{float(x) * options.mouse_sensitivity, float(y) * sign * options.mouse_sensitivity};
+}
 
 void Keyboard(Pad& pad) {
     if (!Active()) {
@@ -274,10 +366,13 @@ void Keyboard(Pad& pad) {
     Binds binds = CopyBinds();
     if (g_settle && AnyPressingKeyDown(binds)) return;
     g_settle = false;
-    MoveKeys move{};
-    PressBoundKeys(binds, pad, move);
-    PressMenuKeys(pad);
-    SetLeftStick(pad, move);
+    bool play = Play();
+    if (!play) ClipCursor(nullptr);
+    StickKeys sticks;
+    PressBoundKeys(binds, play, pad, sticks);
+    if (!play) PressMenuKeys(pad);
+    if (play && NowMs() < g_tap_until) pad.buttons |= g_tap;
+    SetSticks(pad, sticks);
 }
 
 std::span<const Action> Actions() {
