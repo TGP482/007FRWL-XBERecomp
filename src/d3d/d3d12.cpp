@@ -28,6 +28,7 @@
 #include <backends/imgui_impl_win32.h>
 
 #include "app/app.h"
+#include "common/aspect.h"
 #include "core/diag.h"
 #include "core/log.h"
 #include "gpu/backend.h"
@@ -524,6 +525,7 @@ private:
     void EnsurePixelShader(const PixelKey& pk, DrawShaders& sh);
     void BuildPipelineKey(const State& s, const Assembled& a, uint64_t vh, uint64_t ph, PsoKey& k);
     void KeyDepthStencil(const State& s, const Assembled& a, PsoKey& k);
+    void ApplyOverlayBias(const DrawShaders& sh, PsoKey& k) const;
     ID3D12PipelineState* EnsurePipeline(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps);
     void FillPipelineDesc(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps, D3D12_GRAPHICS_PIPELINE_STATE_DESC& d) const;
     void UploadConstants(const State& s, const DrawShaders& sh, const PsoKey& k, const DrawTextures& stages,
@@ -1890,6 +1892,23 @@ void KeyBlend(const State& s, PsoKey& k) {
 
 constexpr float kDepth24Max = 16777215.0f;  // 2^24 minus 1: a 24 bit depth buffer's units per 1.0
 
+// D3DCMP_LESSEQUAL
+constexpr uint32_t kZFuncLessEqual = 0x203;
+// pulls an overlay pass toward the camera: 16 units of a 24 bit depth buffer, a quarter of the depth slope
+constexpr int32_t kOverlayBias = -16;
+constexpr float kOverlaySlope = -0.25f;
+
+// A vertex program pass laid over geometry drawn before (the shadow projection redraws the fixed function world
+// with LESSEQUAL and no depth write). The console runs both through one transform unit with the same matrix, so
+// the depths match bit for bit; here the two paths round differently and the pass loses rows of pixels to the
+// depth test, which flickers as the camera moves. The pass gets a small bias toward the camera instead.
+void D3D12Backend::ApplyOverlayBias(const DrawShaders& sh, PsoKey& k) const {
+    bool overlay = k.zen && !k.zwrite && k.zfunc == kZFuncLessEqual;
+    if (!sh.prog || !overlay || k.zbias || k.zslope) return;
+    k.zbias = kOverlayBias;
+    k.zslope = kOverlaySlope;
+}
+
 void D3D12Backend::KeyDepthStencil(const State& s, const Assembled& a, PsoKey& k) {
     k.zen = s.rs[kRsZEnable] != 0;
     if (k.zen) {
@@ -2475,6 +2494,7 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     // pipeline
     PsoKey k;
     BuildPipelineKey(s, a, sh.vh, sh.ph, k);
+    ApplyOverlayBias(sh, k);
     ID3D12PipelineState* pso = EnsurePipeline(k, sh.vs_code, sh.ps_code);
     if (!pso) return;
     cl_->SetPipelineState(pso);
@@ -2852,9 +2872,8 @@ void D3D12Backend::UploadGammaRamp() {
 }
 
 void D3D12Backend::BlitFrame(Target& t) {
-    // 16:9 when the console reports a widescreen display, else 4:3
-    bool wide = app::Widescreen();
-    float aspect = wide ? 16.0f / 9.0f : 4.0f / 3.0f;
+    // as wide as the output, 4:3 at the narrowest
+    float aspect = game::Aspect();
     float w = float(bb_w_);
     float h = float(bb_h_);
     float vw = std::min(w, h * aspect);
