@@ -23,8 +23,8 @@ include(${SDK}/cmake/XbeRecomp.cmake)
 
 file(GLOB XBE_HOST_SOURCES CONFIGURE_DEPENDS src/*/*.cpp)
 list(FILTER XBE_HOST_SOURCES EXCLUDE REGEX "/src/game/")
-# src/dsound replaces the SDK's DirectSound
-list(FILTER XBE_RUNTIME_SOURCES EXCLUDE REGEX "/xdk/dsound\\.cpp$")
+# src/d3d and src/dsound replace the SDK's Direct3D, renderer and DirectSound
+list(FILTER XBE_RUNTIME_SOURCES EXCLUDE REGEX "/(xdk/dsound|xdk/d3d8|gpu/d3d12)\\.cpp$")
 
 # partitions as xbe_symbols wrote them into config/game.toml
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS config/game.toml)
