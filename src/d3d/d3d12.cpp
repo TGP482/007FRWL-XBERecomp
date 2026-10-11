@@ -523,8 +523,8 @@ private:
     void CaptureInputs(const State& s, const Assembled& a, const DrawConstants& c);
     void CaptureShaders(const State& s, const Assembled& a, const DrawShaders& sh, const PixelKey& pk);
     void CaptureShader(const char* kind, uint64_t key, const std::string& src);
-    void SetTextureViewsAndSamplers(const State& s, DrawTextures& stages);
-    uint32_t EnsureStageSamplers(const State& s, const DrawTextures& stages);
+    void SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages);
+    uint32_t EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp);
     void SetViewportScissor(const State& s, uint32_t gw);
     void SetBlendFactorStencilRef(const State& s);
     void DrawGeometry(const Assembled& a);
@@ -1721,8 +1721,11 @@ ID3D12Resource* D3D12Backend::BindTexture(const State& s, int stage, DrawTexture
 // D3DTEXF: 1 point, 2 linear, 3 anisotropic
 constexpr uint32_t kTexfLinear = 2;
 constexpr uint32_t kTexfAnisotropic = 3;
+// D3DTADDRESS values the samplers test
+constexpr uint32_t kTaddressWrap = 1;
+constexpr uint32_t kTaddressClamp = 3;
 
-D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stages, uint32_t aniso) {
+D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stages, bool clamp, uint32_t aniso) {
     D3D12_SAMPLER_DESC sd = {};
     const auto& t = s.tss[size_t(i)];
     uint32_t mag = t[kTssMagFilter];
@@ -1741,8 +1744,9 @@ D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stage
         sd.Filter = D3D12_FILTER_ANISOTROPIC;
         sd.MaxAnisotropy = std::min<uint32_t>(an, 16);
     }
-    sd.AddressU = Address(t[kTssAddressU]);
-    sd.AddressV = Address(t[kTssAddressV]);
+    // clamp: the draw's coordinates all lie in 0..1 (UnitTexcoords), so wrap is read as clamp
+    sd.AddressU = Address(clamp && t[kTssAddressU] == kTaddressWrap ? kTaddressClamp : t[kTssAddressU]);
+    sd.AddressV = Address(clamp && t[kTssAddressV] == kTaddressWrap ? kTaddressClamp : t[kTssAddressV]);
     sd.AddressW = Address(t[kTssAddressW]);
     sd.MipLODBias = Bits(t[kTssMipLodBias]);
     sd.MinLOD = float(t[kTssMaxMipLevel]);
@@ -1759,10 +1763,10 @@ D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stage
     return sd;
 }
 
-uint32_t D3D12Backend::EnsureStageSamplers(const State& s, const DrawTextures& stages) {
+uint32_t D3D12Backend::EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp) {
     D3D12_SAMPLER_DESC sd[4];
     uint32_t aniso = app::Get().aniso;
-    for (int i = 0; i < 4; i++) sd[i] = StageSampler(s, i, stages, aniso);
+    for (int i = 0; i < 4; i++) sd[i] = StageSampler(s, i, stages, clamp, aniso);
     uint64_t key = Hash(sd, sizeof(sd));
     auto it = samplers_.find(key);
     if (it != samplers_.end()) return it->second;
@@ -2195,8 +2199,33 @@ D3D12_SRV_DIMENSION NullViewDimension(uint8_t kind) {
     return D3D12_SRV_DIMENSION_TEXTURE2D;
 }
 
+// A small draw whose every float2 input lies in 0..1: sprites, HUD pieces, text, full screen passes. The console's
+// pixel centres sample such a quad from its first texel to half a texel short of its far edge; upscaled, the far
+// edge's last half texel is drawn too, and wrapped it blends in the opposite edge (thin dark lines on HUD sprites).
+// Clamped, it takes the edge texel instead, which a wrapped texture used once over 0..1 has there anyway.
+bool UnitTexcoords(const Assembled& a) {
+    constexpr float kLo = -1e-4f;
+    constexpr float kHi = 1.0001f;
+    constexpr uint32_t kSmallDrawVertices = 4096;  // most vertices a small draw has
+    if (!a.vertices.empty() || !a.vertex_count || a.vertex_count > kSmallDrawVertices) return false;
+    bool any = false;
+    for (int r = 0; r < 16; r++) {
+        const VertexElement& e = a.elements[size_t(r)];
+        if (!(a.regs >> r & 1) || e.format != DXGI_FORMAT_R32G32_FLOAT) continue;
+        const VertexBuffer& vb = a.buffers[e.buffer];
+        if (!vb.src || !vb.stride || uint64_t(a.vertex_count) * vb.stride > vb.bytes) return false;
+        for (uint32_t v = 0; v < a.vertex_count; v++) {
+            float uv[2];
+            std::memcpy(uv, vb.src + size_t(v) * vb.stride + e.offset, sizeof(uv));
+            if (!(uv[0] >= kLo && uv[0] <= kHi && uv[1] >= kLo && uv[1] <= kHi)) return false;
+        }
+        any = true;
+    }
+    return any;
+}
+
 // a stage without a texture gets a null view of its kind; the samplers read the views after
-void D3D12Backend::SetTextureViewsAndSamplers(const State& s, DrawTextures& stages) {
+void D3D12Backend::SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages) {
     uint32_t slot = AllocSrvSlots(4);
     for (int i = 0; i < 4; i++) {
         D3D12_SHADER_RESOURCE_VIEW_DESC& sv = stages.sv[i];
@@ -2207,7 +2236,7 @@ void D3D12Backend::SetTextureViewsAndSamplers(const State& s, DrawTextures& stag
         dev_->CreateShaderResourceView(stages.res[i], &sv, Cpu(srv_heap_.Get(), slot + i, srv_inc_));
     }
     cl_->SetGraphicsRootDescriptorTable(2, Gpu(srv_heap_.Get(), slot, srv_inc_));
-    uint32_t samplers = EnsureStageSamplers(s, stages);
+    uint32_t samplers = EnsureStageSamplers(s, stages, UnitTexcoords(a));
     cl_->SetGraphicsRootDescriptorTable(3, Gpu(smp_heap_.Get(), samplers, smp_inc_));
 }
 
@@ -2342,7 +2371,7 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     }
 
     // texture views and samplers, viewport and scissor, blend factor and stencil reference
-    SetTextureViewsAndSamplers(s, stages);
+    SetTextureViewsAndSamplers(s, a, stages);
     SetViewportScissor(s, size.w);
     SetBlendFactorStencilRef(s);
 
