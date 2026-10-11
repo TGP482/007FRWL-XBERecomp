@@ -25,7 +25,7 @@ constexpr float kRadiansPerCount = kDegreesPerCount * kRadiansPerDegree;
 constexpr float kMinSeconds = 1.0f / 240.0f;
 
 // views that turn with the mouse, each takes its own share of the motion
-enum class View { Chase, Jetpack, Turret, Count };
+enum class View { Chase, Jetpack, Turret, Scope, LockOn, Throw, Count };
 
 struct Share {
     input::MouseMove move{};
@@ -62,6 +62,12 @@ input::MouseMove TakeForPlayer(View view, uint32_t player) {
 }
 
 bool Moved(input::MouseMove move) { return move.dx != 0.0f || move.dy != 0.0f; }
+
+// the stick deflection that turns a view by the angle this frame, at the rate a full stick turns it
+float StickForTurn(float turn, float rate, float seconds) {
+    float step = rate * std::max(kMinSeconds, seconds);
+    return step > 0.0f ? turn / step : 0.0f;
+}
 
 // Chase camera, esi through its update.
 
@@ -106,6 +112,33 @@ float TurretInput(float stick, float turn, float speed, float seconds) {
     if (std::fabs(target) <= 1.0f) return target;
     return std::copysign(std::sqrt(std::fabs(target)), target);
 }
+
+// Sniper scope update, esi the player, after the stick curve and invert: x in xmm0, the rest from esp.
+
+constexpr uint32_t kScopeStickY = 0x14;
+constexpr uint32_t kScopeYawRate = 0x18;
+constexpr uint32_t kScopePitchRate = 0x24;
+constexpr uint32_t kScopeSeconds = 0x6C;
+constexpr int kScopeStickXReg = 0;
+
+// Lock on fine aim, edi the player: the stick moves the aim point about the target, from esp.
+
+constexpr uint32_t kLockOnStickX = 0x10;
+constexpr uint32_t kLockOnStickY = 0x14;
+constexpr uint32_t kLockOnSeconds = 0x44;
+constexpr float kLockOnStickDegrees = 3.0f;  // taken as a full stick's turn each frame at 59.94 Hz, as the chase camera
+constexpr float kFrameRate = 59.94f;
+
+float LockOnStickFor(float counts, float seconds) {
+    return counts * kDegreesPerCount / (kLockOnStickDegrees * kFrameRate * std::max(kMinSeconds, seconds));
+}
+
+// Throw aim update, esi the player: the yaw step in xmm1 and the new pitch in xmm0, radians.
+
+constexpr int kThrowYawReg = 1;
+constexpr int kThrowPitchReg = 0;
+
+input::MouseMove g_throw{};  // this update's motion
 
 }  // namespace
 
@@ -155,4 +188,29 @@ void TurretAim(X86Context& ctx, uint8_t*) {
 void TurretAimDone(X86Context& ctx, uint8_t*) {
     G<float>(ctx.esi + kTurretYawInput) = g_turret_stick.yaw;
     G<float>(ctx.esi + kTurretPitchInput) = g_turret_stick.pitch;
+}
+
+void ScopeAim(X86Context& ctx, uint8_t*) {
+    input::MouseMove move = TakeForPlayer(View::Scope, ctx.esi);
+    float seconds = G<float>(ctx.esp + kScopeSeconds);
+    float yaw_rate = G<float>(ctx.esp + kScopeYawRate);
+    float pitch_rate = G<float>(ctx.esp + kScopePitchRate);
+    ctx.xmm[kScopeStickXReg].f[0] += StickForTurn(move.dx * kRadiansPerCount, yaw_rate, seconds);
+    G<float>(ctx.esp + kScopeStickY) += StickForTurn(-move.dy * kRadiansPerCount, pitch_rate, seconds);
+}
+
+void LockOnAim(X86Context& ctx, uint8_t*) {
+    input::MouseMove move = TakeForPlayer(View::LockOn, ctx.edi);
+    float seconds = G<float>(ctx.esp + kLockOnSeconds);
+    G<float>(ctx.esp + kLockOnStickX) += LockOnStickFor(move.dx, seconds);
+    G<float>(ctx.esp + kLockOnStickY) += LockOnStickFor(-move.dy, seconds);
+}
+
+void ThrowYaw(X86Context& ctx, uint8_t*) {
+    g_throw = TakeForPlayer(View::Throw, ctx.esi);
+    ctx.xmm[kThrowYawReg].f[0] -= g_throw.dx * kRadiansPerCount;
+}
+
+void ThrowPitch(X86Context& ctx, uint8_t*) {
+    ctx.xmm[kThrowPitchReg].f[0] -= g_throw.dy * kRadiansPerCount;
 }

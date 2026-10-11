@@ -323,6 +323,23 @@ call = "TurretAim"
 at = 0x12E81F
 call = "TurretAimDone"
 
+# sniper scope, lock on fine aim and throw aim
+[[hook]]
+at = 0x114D4D
+call = "ScopeAim"
+
+[[hook]]
+at = 0x12A84E
+call = "LockOnAim"
+
+[[hook]]
+at = 0x13D93C
+call = "ThrowYaw"
+
+[[hook]]
+at = 0x13D9D3
+call = "ThrowPitch"
+
 # end of the frame render, after the HUD and before the frame is shown: the frame rate is drawn with the game text
 [[hook]]
 at = 0x34D094
