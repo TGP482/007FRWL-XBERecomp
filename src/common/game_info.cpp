@@ -14,6 +14,7 @@
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
+#include "common/saves.h"
 #include "core/input.h"
 
 namespace game {
@@ -111,6 +112,11 @@ void Save(void* table) {
     settings.insert("keys", keys);
 }
 
+void Init() {
+    input::LoadBindings();
+    RemoveUnfinishedSaves();
+}
+
 }  // namespace
 
 Options& Opt() {
@@ -137,7 +143,7 @@ const app::GameInfo app::kGame = {
     },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it
-    .init = input::LoadBindings,            // after the settings load, before the window and boot
+    .init = game::Init,                     // after the settings load, before the window and boot
     .loaded = nullptr,                      // image in memory, before its entry point runs
     .window = input::StartMouse,            // the game window is up
     .message = game::Message,               // window messages first; true takes one
