@@ -1,12 +1,14 @@
 // Button prompts on keyboard and mouse. A menu's button legend is a Flash clip of the button's picture between two
 // texts (the shadow and the text): with the keyboard or mouse used last the picture is hidden and the text leads with
 // the key, "(ENTER) Select". The game draws every line of text through one call, where the legends are relabelled
-// and a button the font draws as a picture ("Press[RDDown]to continue") is named by its key.
+// and a button the font draws as a picture ("Press[RDDown]to continue") is named by its key. The console's wording
+// reads in PC terms: the Xbox's names always, START and the controller with the keyboard or mouse used last.
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "common/mouse_keyboard.h"
@@ -71,6 +73,23 @@ constexpr Token kTokens[] = {
     {"LDUpDown", {kUp, kDown}},
     {"LDLeftRight", {kLeft, kRight}},
 };
+
+// English wording, whole words, applied in order
+struct Swap {
+    std::string_view from;
+    std::string_view to;
+};
+constexpr Swap kPcWording[] = {
+    {"Xbox console", "PC"},
+    {"Your Xbox", "Your PC"},
+    {"Xbox hard disk", "hard disk"},
+    {"free blocks", "free space"},
+    {"more blocks", "more space"},
+};
+constexpr Swap kKeyboardWording[] = {
+    {"START on any controller", "START"},
+};
+constexpr std::string_view kStartWord = "START";
 
 constexpr int kMaxTreeDepth = 12;
 constexpr size_t kMaxVisits = 4096;
@@ -236,10 +255,48 @@ bool NameKeys(std::string& text) {
     return changed;
 }
 
+bool Letter(const std::string& text, size_t at) {
+    return at < text.size() && std::isalpha(static_cast<unsigned char>(text[at]));
+}
+
+// every whole word occurrence
+bool Replace(std::string& text, std::string_view from, std::string_view to) {
+    bool changed = false;
+    for (size_t at = text.find(from); at != std::string::npos; at = text.find(from, at)) {
+        bool word = (at == 0 || !Letter(text, at - 1)) && !Letter(text, at + from.size());
+        if (!word) {
+            at += from.size();
+            continue;
+        }
+        text.replace(at, from.size(), to);
+        at += to.size();
+        changed = true;
+    }
+    return changed;
+}
+
+bool ReplaceAll(std::string& text, const Swap* swaps, size_t count) {
+    bool changed = false;
+    for (size_t i = 0; i < count; i++) changed |= Replace(text, swaps[i].from, swaps[i].to);
+    return changed;
+}
+
+// START is the menus' Enter and play's pause key
+bool NameStart(std::string& text) {
+    bool changed = ReplaceAll(text, kKeyboardWording, std::size(kKeyboardWording));
+    std::string label = input::CursorShown() ? "(ENTER)" : Label({kStart}, false);
+    if (!label.empty()) changed |= Replace(text, kStartWord, label);
+    return changed;
+}
+
 std::optional<std::string> Reworded(const char* line) {
     std::string text(line, strnlen(line, kMaxText));
-    bool changed = false;
-    if (input::KeyboardActive()) changed = LeadWithKey(text) || NameKeys(text);
+    bool changed = ReplaceAll(text, kPcWording, std::size(kPcWording));
+    if (input::KeyboardActive()) {
+        changed |= LeadWithKey(text);
+        changed |= NameKeys(text);
+        changed |= NameStart(text);
+    }
     if (!changed || text.size() >= kMaxText) return std::nullopt;
     return text;
 }
