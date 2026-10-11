@@ -279,10 +279,30 @@ XPP_MemoryUnitType          = 0x682558
 # convention: a register (eax ebx ecx edx esi edi ebp) or "stack" for the next stack slot, which the callee pops
 [abi]
 
-# chase camera update, after the stick x is squared: mouse look adds to the stick
+# chase camera update, before it turns: the mouse motion for this update
 [[hook]]
 at = 0xB47ED
-call = "MouseLook"
+call = "ChaseMouseTake"
+
+# chase camera turns, the mouse joins them past the stick's smoothing
+[[hook]]
+at = 0xB589D
+call = "ChasePitch"
+
+[[hook]]
+at = 0xB59B9
+call = "ChaseYaw"
+
+# chase camera with no stick input: mouse motion holds the yaw and pitch as the stick does
+[[hook]]
+at = 0xB53F6
+call = "ChaseHoldsCentring"
+on_true = 0xB54A1
+
+[[hook]]
+at = 0xB5927
+call = "ChaseHoldsCentring"
+on_true = 0xB5976
 
 # end of the frame render, after the HUD and before the frame is shown: the frame rate is drawn with the game text
 [[hook]]
