@@ -7,7 +7,6 @@
 #endif
 #include <windows.h>
 #include <mmreg.h>
-#include <ksmedia.h>
 #include <xaudio2.h>
 
 #include <atomic>
@@ -47,8 +46,8 @@ bool HasSurround(DWORD mask) {
 }
 
 WAVEFORMATEXTENSIBLE MixFormat() {
-    // the STATIC_ form needs no GUID library at link time
-    static const GUID kFloat = {STATIC_KSDATAFORMAT_SUBTYPE_IEEE_FLOAT};
+    // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: ksmedia.h needs ks.h, which breaks GUID_NULL
+    static const GUID kFloat = {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71}};
     WAVEFORMATEXTENSIBLE wf{};
     wf.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
     wf.Format.nChannels = kChannels;
@@ -58,7 +57,7 @@ WAVEFORMATEXTENSIBLE MixFormat() {
     wf.Format.nAvgBytesPerSec = kRate * kChannels * sizeof(float);
     wf.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
     wf.Samples.wValidBitsPerSample = 32;
-    wf.dwChannelMask = KSAUDIO_SPEAKER_5POINT1;
+    wf.dwChannelMask = kFront | kBack;
     wf.SubFormat = kFloat;
     return wf;
 }
