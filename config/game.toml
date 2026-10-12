@@ -358,6 +358,11 @@ call = "CopterMouseTake"
 at = 0x1D99DD
 call = "CopterTurn"
 
+# camera render bucket loop, before each bucket: ambient occlusion before the scene's sorted translucents
+[[hook]]
+at = 0x3546D2
+call = "AmbientOcclusion"
+
 # end of the frame render, after the HUD and before the frame is shown: the frame rate is drawn with the game text
 [[hook]]
 at = 0x34D094

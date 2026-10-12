@@ -11,6 +11,7 @@ struct Options {
     bool fps_counter = false;
     bool invert_mouse = false;
     bool camera_centring = false;  // the chase camera swings back behind Bond on keyboard and mouse
+    uint32_t ambient_occlusion = 0;  // screen space, from the scene's depth: 0 off, 1 SSAO, 2 GTAO
     float mouse_sensitivity = 1.0f;
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };

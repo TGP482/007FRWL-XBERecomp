@@ -143,6 +143,7 @@ const app::GameInfo app::kGame = {
         {"camera_centring", &game::Opt().camera_centring, nullptr},
         {"skip_intros", &game::Opt().skip_intros, nullptr},
         {"fps_counter", &game::Opt().fps_counter, nullptr},
+        {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},
     },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it

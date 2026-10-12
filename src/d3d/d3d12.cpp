@@ -31,6 +31,7 @@
 #include "common/aspect.h"
 #include "core/diag.h"
 #include "core/log.h"
+#include "d3d/occlusion.h"
 #include "gpu/backend.h"
 #include "gpu/ext.h"
 #include "gpu/shaders.h"
@@ -153,6 +154,177 @@ float4 vs(uint id : SV_VertexID) : SV_Position {
 }
 float4 psmain() : SV_Target { return colour; }
 )";
+
+// from the scene's depth: occlusion pass, then a blur across and one down that multiplies it into the colour.
+// The sky writes no depth and stays at the clear: a pixel's samples there span less than one pixel and it stays lit
+const char* kAoHlsl = R"(
+cbuffer A : register(b1) { float4 proj; float4 zp; float4 vp; float4 opt; float4 fog; };
+Texture2D<float> depth : register(t0);
+Texture2D<float2> ao : register(t1);
+float Raw(int2 p) { return depth.Load(int3(p, 0)); }
+float4 vs(uint id : SV_VertexID) : SV_Position {
+    float2 t = float2((id << 1) & 2, id & 2);
+    return float4(t * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+// view space position of a pixel. proj: 1 / scale xy, centre xy; zp: z = x / (depth - y); vp: viewport in pixels
+float3 View(float2 px) {
+    int2 p = clamp(int2(px), int2(vp.xy), int2(vp.xy + vp.zw) - 1);
+    float z = zp.x / (Raw(p) - zp.y);
+    float2 ndc = (p + 0.5 - vp.xy) / vp.zw * float2(2, -2) + float2(-1, 1);
+    return float3((ndc - proj.zw) * proj.xy * z, z);
+}
+// normal from the nearer neighbour each way: no bend over depth edges
+float3 Normal(float2 pos, float3 c) {
+    float3 l = View(pos - float2(1, 0));
+    float3 r = View(pos + float2(1, 0));
+    float3 u = View(pos - float2(0, 1));
+    float3 d = View(pos + float2(0, 1));
+    float3 dx = abs(r.z - c.z) < abs(c.z - l.z) ? r - c : c - l;
+    float3 dy = abs(d.z - c.z) < abs(c.z - u.z) ? d - c : c - u;
+    return normalize(cross(dx, dy));
+}
+static const float kDither[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+// opt: world radius, most pixels it may span; out: occlusion, view z
+float2 occlusion(float4 pos : SV_Position) : SV_Target {
+    float3 c = View(pos.xy);
+    float2 rad = opt.x * 0.5 * vp.zw / (proj.xy * c.z);
+    float span = max(rad.x, rad.y);
+    if (span < 1) return float2(1, c.z);
+    float3 n = Normal(pos.xy, c);
+    float k = min(1, opt.y / span);
+    float R = opt.x * k;
+    int2 cell = int2(pos.xy) & 3;
+    float turn = kDither[cell.y * 4 + cell.x] * (6.2831853 / 16);
+    float a = 0;
+    for (int i = 0; i < 16; i++) {
+        float f = (i + 0.5) / 16;
+        float t = i * 2.3999632 + turn;
+        float3 v = (View(pos.xy + float2(cos(t), sin(t)) * rad * (k * f)) - c) / R;
+        float vv = dot(v, v);
+        float w = max(1 - vv, 0);
+        a += w * w * w * max((dot(v, n) - 0.05) / (vv + 0.01), 0);
+    }
+    return float2(max(1 - a * 0.25, 0), c.z);
+}
+static const float kHalfPi = 1.5707963;
+// GTAO (Jimenez 2016) at XeGTAO's high preset: 3 slices, 3 steps a side, squared step spread, falloff over the outer
+// 61.5% of the radius, power 2.2. Per slice the highest horizon each side, the visible arc between integrated against
+// the normal projected into the slice
+float2 gtao(float4 pos : SV_Position) : SV_Target {
+    float3 c = View(pos.xy);
+    float2 rad = opt.x * 0.5 * vp.zw / (proj.xy * c.z);
+    float span = max(rad.x, rad.y);
+    if (span < 1) return float2(1, c.z);
+    float3 n = Normal(pos.xy, c);
+    float3 v = normalize(-c);
+    float k = min(1, opt.y / span);
+    float R = opt.x * k;
+    int2 cell = int2(pos.xy) & 3;
+    float slice_noise = kDither[cell.y * 4 + cell.x] / 16;
+    float step_noise = kDither[cell.x * 4 + cell.y] / 16;
+    float vis = 0;
+    for (int s = 0; s < 3; s++) {
+        float phi = (s + slice_noise) * (kHalfPi * 2 / 3);
+        float3 dir = float3(cos(phi), sin(phi), 0);
+        // in pixels; screen y runs down, view y up
+        float2 omega = float2(dir.x, -dir.y) * rad * k;
+        float3 ortho = dir - dot(dir, v) * v;
+        float3 axis = normalize(cross(ortho, v));
+        float3 pn = n - axis * dot(n, axis);
+        float pn_len = max(length(pn), 1e-4);
+        float cos_n = saturate(dot(pn, v) / pn_len);
+        float an = sign(dot(ortho, pn)) * acos(cos_n);
+        // x: the +omega side, y: the -omega side; lowest is flat along the slice's tangent
+        float2 low = float2(cos(an + kHalfPi), cos(an - kHalfPi));
+        float2 hc = low;
+        for (int j = 0; j < 3; j++) {
+            float f = (j + step_noise) / 3;
+            // at least 1.3 pixels out, off the centre pixel
+            float2 off = omega * (f * f + 1.3 / length(omega));
+            float3 d0 = View(pos.xy + off) - c;
+            float3 d1 = View(pos.xy - off) - c;
+            float2 len = max(float2(length(d0), length(d1)), 1e-4);
+            float2 w = saturate((R - len) / (R * 0.615));
+            float2 sc = float2(dot(d0, v), dot(d1, v)) / len;
+            hc = max(hc, lerp(low, sc, w));
+        }
+        float h0 = an + clamp(-acos(hc.y) - an, -kHalfPi, kHalfPi);
+        float h1 = an + clamp(acos(hc.x) - an, -kHalfPi, kHalfPi);
+        float sin_n = sin(an);
+        float arc0 = (cos_n + 2 * h0 * sin_n - cos(2 * h0 - an)) / 4;
+        float arc1 = (cos_n + 2 * h1 * sin_n - cos(2 * h1 - an)) / 4;
+        vis += pn_len * (arc0 + arc1);
+    }
+    return float2(pow(saturate(vis / 3), 2.2), c.z);
+}
+// opt.zw: step; 5 taps average the 4 pixel dither, depth edges left out
+float Smooth(float2 pos, out float z) {
+    int2 p = int2(pos);
+    int2 lo = int2(vp.xy);
+    int2 hi = int2(vp.xy + vp.zw) - 1;
+    z = ao.Load(int3(p, 0)).y;
+    float sum = 0;
+    float n = 0;
+    for (int i = -2; i <= 2; i++) {
+        float2 s = ao.Load(int3(clamp(p + i * int2(opt.zw), lo, hi), 0));
+        float w = (abs(i) == 2 ? 0.5 : 1) * saturate(2 - abs(s.y - z) / (z * 0.02));
+        sum += s.x * w;
+        n += w;
+    }
+    return sum / n;
+}
+float2 occlusion_blur(float4 pos : SV_Position) : SV_Target {
+    float z;
+    float a = Smooth(pos.xy, z);
+    return float2(a, z);
+}
+// fog: the game's, already drawn over the scene, fades the occlusion out as it thickens
+float4 occlusion_apply(float4 pos : SV_Position) : SV_Target {
+    float z;
+    float a = Smooth(pos.xy, z);
+    float fogged = min(saturate(fog.x * z + fog.y), fog.z);
+    return float4(lerp(a, 1, fogged).xxx, 1);
+}
+)";
+constexpr int kAoTargets = 2;
+constexpr int kAoConstants = 20;  // kAoHlsl's b1
+constexpr DXGI_FORMAT kAoFormat = DXGI_FORMAT_R16G16_FLOAT;
+constexpr float kAoRadius = 0.8f;    // world units, the engine's are metres
+constexpr float kAoMaxSpan = 0.15f;  // of the view's height, the most one pixel's samples may cover
+
+// the viewport in target pixels
+D3D12_RECT ViewRect(const Viewport& v, const Target& t) {
+    float sc = float(t.w) / t.gw;
+    D3D12_RECT r;
+    r.left = std::clamp<LONG>(LONG(v.x * sc), 0, t.w);
+    r.top = std::clamp<LONG>(LONG(v.y * sc), 0, t.h);
+    r.right = std::clamp<LONG>(LONG((v.x + v.w) * sc), 0, t.w);
+    r.bottom = std::clamp<LONG>(LONG((v.y + v.h) * sc), 0, t.h);
+    return r;
+}
+
+// b1 of kAoHlsl: proj, zp with the viewport's depth range, vp, opt (its step written per pass), fog
+void OcclusionConstants(const Viewport& v, const D3D12_RECT& r, const float p[4 * kOcclusionRects],
+                        float c[kAoConstants]) {
+    float zr = v.max_z - v.min_z;
+    float w = float(r.right - r.left);
+    float h = float(r.bottom - r.top);
+    const float out[kAoConstants] = {p[0], p[1], p[2], p[3], p[4] * zr, v.min_z + p[5] * zr, 0, 0,
+                                     float(r.left), float(r.top), w, h, kAoRadius, kAoMaxSpan * h, 0, 0,
+                                     p[8], p[9], p[10], 0};
+    std::memcpy(c, out, sizeof(out));
+}
+
+// dst = dst * src; the alpha the game's blends read stays
+void MultiplyBlend(D3D12_RENDER_TARGET_BLEND_DESC& b) {
+    b.BlendEnable = TRUE;
+    b.SrcBlend = D3D12_BLEND_ZERO;
+    b.SrcBlendAlpha = D3D12_BLEND_ZERO;
+    b.DestBlend = D3D12_BLEND_SRC_COLOR;
+    b.DestBlendAlpha = D3D12_BLEND_ONE;
+    b.BlendOp = D3D12_BLEND_OP_ADD;
+    b.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+}
 
 float Bits(uint32_t v) {
     float f;
@@ -619,6 +791,24 @@ private:
     void ClearTarget(Target& t, const State& s, const ClearArgs& c, std::vector<D3D12_RECT>& rs);
     void ClearChannels(Target& t, const float col[4], uint8_t mask, const std::vector<D3D12_RECT>& rs);
     ID3D12PipelineState* EnsureClearPipeline(DXGI_FORMAT rtv, uint8_t mask);
+    // one full screen pass of kAoHlsl
+    struct AoPass {
+        const char* entry;
+        DXGI_FORMAT out;
+        bool multiply;  // onto the target
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv;
+        ID3D12Resource* depth;  // the scene's, read by the first pass
+        ID3D12Resource* src;    // the pass before
+        float step_x;
+        float step_y;
+    };
+    void Occlusion(const State& s, const float p[4 * kOcclusionRects]);
+    bool OcclusionFits(const Target* rt, const Target* ds) const;
+    bool EnsureOcclusionTargets(uint32_t w, uint32_t h);
+    D3D12_CPU_DESCRIPTOR_HANDLE OcclusionView(int i) { return Cpu(rtv_heap_.Get(), kRtvCount + kFrames + i, rtv_inc_); }
+    ID3D12PipelineState* EnsureOcclusionPipeline(const AoPass& a);
+    void CreateOcclusionViews(uint32_t slot, const AoPass& a);
+    bool DrawOcclusionPass(const AoPass& a, float c[kAoConstants], const D3D12_RECT& rect, uint32_t w, uint32_t h);
     // Copy's guest lists: count src_rects, dst_points 0 or one per rect
     struct CopyList {
         uint32_t count;
@@ -672,6 +862,11 @@ private:
     std::unordered_map<uint64_t, Target> targets_;
     std::unordered_map<uint64_t, Tex> textures_;  // by data address, a P8 texture's with its palette's above
     std::unordered_map<uint64_t, ComPtr<ID3D12PipelineState>> blit_psos_;
+    // ambient occlusion: the raw pass and its first blur, each with view z beside it
+    ComPtr<ID3D12Resource> ao_[kAoTargets];
+    D3D12_RESOURCE_STATES ao_state_[kAoTargets] = {};
+    uint32_t ao_w_ = 0;
+    uint32_t ao_h_ = 0;
     Extension* ext_ = nullptr;
     // one frame capture: every draw in a text file, each target as the frame leaves it, the textures it read
     FILE* cap_ = nullptr;
@@ -820,7 +1015,7 @@ void D3D12Backend::CreateBackBufferViews() {
 void D3D12Backend::CreateHeaps() {
     srv_inc_ = CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kSrvCount, true, srv_heap_);
     smp_inc_ = CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, kSamplerCount, true, smp_heap_);
-    rtv_inc_ = CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kRtvCount + kFrames, false, rtv_heap_);
+    rtv_inc_ = CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kRtvCount + kFrames + kAoTargets, false, rtv_heap_);
     dsv_inc_ = CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kDsvCount, false, dsv_heap_);
     CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, true, ui_heap_);
     for (uint32_t i = kRtvCount; i-- > 0;) free_rtv_.push_back(i);
@@ -2596,8 +2791,131 @@ void D3D12Backend::ClearChannels(Target& t, const float col[4], uint8_t mask, co
     }
 }
 
+// multiplies occlusion from the scene's depth into its colour, p as d3d::Occlusion sends it
+void D3D12Backend::Occlusion(const State& s, const float p[4 * kOcclusionRects]) {
+    Target* rt = FindTarget(s.rt, false);
+    Target* ds = FindTarget(s.zs, true);
+    if (!OcclusionFits(rt, ds)) return;
+    const Viewport& v = s.viewport;
+    D3D12_RECT rect = ViewRect(v, *rt);
+    if (rect.right <= rect.left || rect.bottom <= rect.top || v.max_z <= v.min_z) return;
+    if (!EnsureOcclusionTargets(rt->w, rt->h)) return;
+    if (cap_) {
+        CapStep(s.rt);
+        fprintf(cap_, "%04u occlusion rt %08X ds %08X\n", cap_i_++, s.rt.data, s.zs.data);
+    }
+    LOG_FIRST(1, "d3d12: ambient occlusion %s %ux%u, projection %.4f %.4f, view z %.6f / (depth - %.8f)",
+              p[6] ? "GTAO" : "SSAO", rt->w, rt->h, 1 / p[0], 1 / p[1], p[4], p[5]);
+    float c[kAoConstants];
+    OcclusionConstants(v, rect, p, c);
+    const char* entry = p[6] ? "gtao" : "occlusion";
+    AoPass raw{entry, kAoFormat, false, OcclusionView(0), ds->res.Get(), nullptr, 0, 0};
+    AoPass across{"occlusion_blur", kAoFormat, false, OcclusionView(1), nullptr, ao_[0].Get(), 1, 0};
+    D3D12_CPU_DESCRIPTOR_HANDLE scene = Cpu(rtv_heap_.Get(), rt->view, rtv_inc_);
+    AoPass down{"occlusion_apply", rt->fmt, true, scene, nullptr, ao_[1].Get(), 0, 1};
+    bound_rt_ = bound_ds_ = nullptr;
+    Transition(ds->res.Get(), ds->state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    Transition(ao_[0].Get(), ao_state_[0], D3D12_RESOURCE_STATE_RENDER_TARGET);
+    bool ok = DrawOcclusionPass(raw, c, rect, rt->w, rt->h);
+    Transition(ds->res.Get(), ds->state, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    if (!ok) return;
+    Transition(ao_[0].Get(), ao_state_[0], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    Transition(ao_[1].Get(), ao_state_[1], D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if (!DrawOcclusionPass(across, c, rect, rt->w, rt->h)) return;
+    Transition(ao_[1].Get(), ao_state_[1], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    Transition(rt->res.Get(), rt->state, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if (DrawOcclusionPass(down, c, rect, rt->w, rt->h)) rt->drawn = true;
+}
+
+// the frame's own scene only: views drawn to smaller targets are left
+bool D3D12Backend::OcclusionFits(const Target* rt, const Target* ds) const {
+    if (!rt || !ds || rt->gw != guest_w_ || rt->gh != guest_h_) return false;
+    return ds->w == rt->w && ds->h == rt->h;
+}
+
+bool D3D12Backend::EnsureOcclusionTargets(uint32_t w, uint32_t h) {
+    if (ao_[kAoTargets - 1] && ao_w_ == w && ao_h_ == h) return true;
+    D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_DEFAULT};
+    D3D12_RESOURCE_DESC td{};
+    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    td.Width = w;
+    td.Height = h;
+    td.DepthOrArraySize = 1;
+    td.MipLevels = 1;
+    td.Format = kAoFormat;
+    td.SampleDesc.Count = 1;
+    td.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    for (int i = 0; i < kAoTargets; i++) {
+        if (ao_[i]) Release(std::move(ao_[i]));
+        ao_state_[i] = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        HRESULT hr = dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, ao_state_[i], nullptr,
+                                                   IID_PPV_ARGS(&ao_[i]));
+        if (FAILED(hr)) {
+            LOGE("d3d12: no %ux%u ambient occlusion target", w, h);
+            return false;
+        }
+        dev_->CreateRenderTargetView(ao_[i].Get(), nullptr, OcclusionView(i));
+    }
+    ao_w_ = w;
+    ao_h_ = h;
+    return true;
+}
+
+// the pass's pipeline, kept in blit_psos_
+ID3D12PipelineState* D3D12Backend::EnsureOcclusionPipeline(const AoPass& a) {
+    auto& pso = blit_psos_[Hash(a.entry, std::strlen(a.entry), uint64_t(a.out))];
+    if (pso) return pso.Get();
+    uint64_t h;
+    ID3DBlob* vs = Compile(kAoHlsl, "vs", "vs_5_0", h);
+    ID3DBlob* ps = Compile(kAoHlsl, a.entry, "ps_5_0", h);
+    if (!vs || !ps) return nullptr;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d = FullScreenPipelineDesc(vs, ps, a.out);
+    if (a.multiply) MultiplyBlend(d.BlendState.RenderTarget[0]);
+    if (FAILED(dev_->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&pso)))) return nullptr;
+    return pso.Get();
+}
+
+// t0 the scene's depth, t1 the pass before, t2 and t3 unused
+void D3D12Backend::CreateOcclusionViews(uint32_t slot, const AoPass& a) {
+    ID3D12Resource* res[4] = {a.depth, a.src, nullptr, nullptr};
+    const DXGI_FORMAT fmt[4] = {DXGI_FORMAT_R24_UNORM_X8_TYPELESS, kAoFormat, kBgra, kBgra};
+    for (int i = 0; i < 4; i++) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+        sv.Format = res[i] ? fmt[i] : kBgra;
+        sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sv.Texture2D.MipLevels = 1;
+        dev_->CreateShaderResourceView(res[i], &sv, Cpu(srv_heap_.Get(), slot + i, srv_inc_));
+    }
+}
+
+bool D3D12Backend::DrawOcclusionPass(const AoPass& a, float c[kAoConstants], const D3D12_RECT& rect, uint32_t w,
+                                     uint32_t h) {
+    ID3D12PipelineState* pso = EnsureOcclusionPipeline(a);
+    if (!pso) return false;
+    uint32_t slot = AllocSrvSlots(4);
+    CreateOcclusionViews(slot, a);
+    c[14] = a.step_x;
+    c[15] = a.step_y;
+    Alloc cb = Upload(256, 256);
+    std::memcpy(cb.cpu, c, kAoConstants * sizeof(float));
+    D3D12_VIEWPORT vp{0, 0, float(w), float(h), 0, 1};
+    cl_->OMSetRenderTargets(1, &a.rtv, FALSE, nullptr);
+    cl_->RSSetViewports(1, &vp);
+    cl_->RSSetScissorRects(1, &rect);
+    DrawFullScreen(pso, cb.gpu, slot);
+    return true;
+}
+
 void D3D12Backend::Clear(const State& s, uint32_t count, const uint8_t* rects, uint32_t flags, uint32_t color, float z,
                          uint32_t stencil) {
+    if (flags & kClearOcclusion) {
+        if (count != kOcclusionRects || !rects) return;
+        float p[4 * kOcclusionRects];
+        std::memcpy(p, rects, sizeof(p));
+        Occlusion(s, p);
+        return;
+    }
     PerfScope perf_clear{g_perf.clear};
     if (cap_) {
         CapStep(s.rt);

@@ -83,6 +83,8 @@ constexpr std::pair<ImGuiCol, ImVec4> kPanelColors[] = {
 
 constexpr uint32_t kAnisoValues[] = {0, 2, 4, 8, 16};
 const char* const kAnisoNames[] = {"GAME DEFAULT", "2x", "4x", "8x", "16x"};
+constexpr uint32_t kAoValues[] = {0, 1, 2};
+const char* const kAoNames[] = {"OFF", "SSAO", "GTAO"};
 constexpr uint32_t kFpsCaps[] = {30, 60, 75, 90, 120, 144, 165, 240, 360, 0};
 const char* const kDisplayModeNames[] = {"FULLSCREEN", "BORDERLESS", "WINDOWED"};
 constexpr int kDisplayModeCount = int(std::size(kDisplayModeNames));
@@ -238,6 +240,10 @@ std::string StepFpsCounter(Settings&, int step) {
 
 std::string StepAniso(Settings& s, int step) { return kAnisoNames[StepTable(kAnisoValues, s.aniso, step)]; }
 
+std::string StepAmbientOcclusion(Settings&, int step) {
+    return kAoNames[StepTable(kAoValues, game::Opt().ambient_occlusion, step)];
+}
+
 std::string StepSkipIntros(Settings&, int step) {
     bool& on = game::Opt().skip_intros;
     if (step) on = !on;
@@ -288,6 +294,7 @@ enum RowId {
     kSensitivityRow,
     kInvertLookRow,
     kCameraCentringRow,
+    kAmbientOcclusionRow,
 };
 
 // in RowId order
@@ -303,6 +310,7 @@ constexpr StepFn kSteps[] = {
     StepSensitivity,
     StepInvertLook,
     StepCameraCentring,
+    StepAmbientOcclusion,
 };
 
 bool Held(int id) { return id == kDisplayModeRow || id == kResolutionRow; }
@@ -320,6 +328,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kFpsCounterRow, "FPS COUNTER"},
     {Kind::Heading, -1, "GRAPHICS"},
     {Kind::Value, kAnisoRow, "ANISOTROPIC FILTERING"},
+    {Kind::Value, kAmbientOcclusionRow, "AMBIENT OCCLUSION"},
     {Kind::Heading, -1, "GENERAL"},
     {Kind::Value, kSkipIntrosRow, "SKIP INTROS"},
 };

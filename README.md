@@ -23,6 +23,7 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 
 ### Graphics
 - **Anisotropic Filtering** - Forces the selected anisotropic filtering level on all textures.
+- **Ambient Occlusion** - Adds screen space ambient occlusion, creating soft contact shadows where surfaces meet. Choose between SSAO and GTAO.
 
 ### Input
 - **Controller** - Controller with SDL3 support. Defaults match the Xbox layout.

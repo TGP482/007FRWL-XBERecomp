@@ -10,6 +10,7 @@
 
 #include "app/app.h"
 #include "core/diag.h"
+#include "d3d/occlusion.h"
 #include "gpu/backend.h"
 #include "gpu/shaders.h"
 #include "gpu/texture.h"
@@ -243,6 +244,49 @@ void VerticalBlank(X86Context& ctx) {
 
 gpu::State& State() { return g_state; }
 std::recursive_mutex& Lock() { return g_lock; }
+
+constexpr int kProjection = 3;  // D3DTS_PROJECTION, the renderer keeps Direct3D 8's numbers
+
+// The game fogs the world with fixed function linear table fog on clip z; the state the scene was drawn with tells
+// ambient occlusion how thick it is
+constexpr uint32_t kFogLinear = 3;
+
+// fog amount at view depth z: min(saturate(slope * z + offset), most)
+struct FogFade {
+    float slope = 0;
+    float offset = 0;
+    float most = 0;
+};
+
+float StateFloat(uint32_t rs) {
+    float f;
+    std::memcpy(&f, &g_state.rs[rs], 4);
+    return f;
+}
+
+// m: the camera to screen matrix, clip z = m[10] * view z + m[14]
+FogFade FogOverDepth(const float* m) {
+    if (!g_state.rs[gpu::kRsFogEnable] || g_state.rs[gpu::kRsFogTableMode] != kFogLinear) return {};
+    float start = StateFloat(gpu::kRsFogStart);
+    float range = StateFloat(gpu::kRsFogEnd) - start;
+    if (range <= 0) return {};
+    return {m[10] / range, (m[14] - start) / range, 1};
+}
+
+// sent as p: 1 / the projection's x and y scale, its x and y centre, then view z = p[4] / (ndc depth - p[5]),
+// then p[6]: 1 for GTAO, 0 for SSAO, then the fog already drawn: min(saturate(p[8] * view z + p[9]), p[10])
+void Occlusion(bool gtao) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    const float* m = g_state.transforms[kProjection].data();
+    bool perspective = m[11] == 1.0f && m[15] == 0.0f;
+    if (!g_backend || !perspective || !m[0] || !m[5]) return;
+    float mode = gtao ? 1.0f : 0.0f;
+    FogFade fog = FogOverDepth(m);
+    const float p[4 * gpu::kOcclusionRects] = {1 / m[0], 1 / m[5], m[8], m[9], m[14], m[10], mode, 0,
+                                               fog.slope, fog.offset, fog.most, 0};
+    const uint8_t* rects = reinterpret_cast<const uint8_t*>(p);
+    g_backend->Clear(g_state, gpu::kOcclusionRects, rects, gpu::kClearOcclusion, 0, 0, 0);
+}
 
 }  // namespace d3d
 
