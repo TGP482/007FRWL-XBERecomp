@@ -146,7 +146,7 @@ input::MouseMove g_throw{};  // this update's motion
 // Q copter, the right stick turns it about its up axis at a rate that eases toward the stick; the mouse adds its
 // turn after the easing.
 
-constexpr int kCopterTurnReg = 0;  // xmm, the turn this step in radians
+constexpr int kCopterTurnReg = 0;  // xmm, the turn this step in degrees
 
 input::MouseMove g_copter{};  // this frame's motion
 
@@ -251,6 +251,6 @@ void CopterMouseTake(X86Context& ctx, uint8_t*) {
 }
 
 void CopterTurn(X86Context& ctx, uint8_t*) {
-    ctx.xmm[kCopterTurnReg].f[0] -= g_copter.dx * kRadiansPerCount;
+    ctx.xmm[kCopterTurnReg].f[0] -= g_copter.dx * kDegreesPerCount;
     g_copter = {};
 }
