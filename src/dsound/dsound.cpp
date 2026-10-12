@@ -88,6 +88,25 @@ struct Packet {
     uint32_t used = 0;
 };
 
+// DSMIXBIN numbers the host mixes
+enum MixBin : uint32_t {
+    kBinFrontLeft,
+    kBinFrontRight,
+    kBinCentre,
+    kBinSub,
+    kBinBackLeft,
+    kBinBackRight,
+    kBinCrosstalk,  // 6..9: crosstalk front left, front right, back left, back right
+};
+constexpr uint32_t kBins = 10;
+constexpr uint32_t kSpeakerBins = 6;
+constexpr uint32_t kMaxChannels = 8;
+
+// gain of each voice channel on each mix bin
+struct Mix {
+    float bin[kMaxChannels][kBins];
+};
+
 struct Voice {
     uint32_t obj = 0;
     bool stream = false;
@@ -115,6 +134,8 @@ struct Voice {
     bool is3d = false;
     uint32_t mode = 0;  // DS3DMODE: 1 head relative, 2 disabled
     float p[3] = {}, min_dist = 1, max_dist = 1e9f;
+    Mix mix = {};  // the last block's levels, the next block ramps from them
+    bool has_mix = false;
     // ADPCM block cache
     int64_t block = -1;
     int16_t decoded[65 * 8];
@@ -204,25 +225,6 @@ void Complete(Voice& v, Packet& pk, uint32_t status) {
     }
 }
 
-// DSMIXBIN numbers the host mixes
-enum MixBin : uint32_t {
-    kBinFrontLeft,
-    kBinFrontRight,
-    kBinCentre,
-    kBinSub,
-    kBinBackLeft,
-    kBinBackRight,
-    kBinCrosstalk,  // 6..9: crosstalk front left, front right, back left, back right
-};
-constexpr uint32_t kBins = 10;
-constexpr uint32_t kSpeakerBins = 6;
-constexpr uint32_t kMaxChannels = 8;
-
-// gain of each voice channel on each mix bin
-struct Mix {
-    float bin[kMaxChannels][kBins];
-};
-
 // The library gives every hardware voice (two channels) a run of n / voices slots and silences the slots of the
 // other voices. A stereo voice plays its left channel on even slots and its right on odd ones.
 uint32_t ChannelOfSlot(const Voice& v, uint32_t voice, uint32_t slot) {
@@ -285,7 +287,28 @@ void Apply3D(const Voice& v, Mix& m) {
 Mix Levels(const Voice& v) {
     Mix m = SlotLevels(v);
     if (v.is3d && v.mode != 2) Apply3D(v, m);
+    // a sound placed at NaN goes silent alone; its NaN gain would silence the whole mix
+    for (auto& channel : m.bin) {
+        for (float& gain : channel) {
+            if (!std::isfinite(gain)) gain = 0;
+        }
+    }
     return m;
+}
+
+// levels follow the game once a frame: stepped per block, a fast turn clicks
+Mix RampStep(const Mix& from, const Mix& to, uint32_t frames) {
+    Mix step;
+    for (uint32_t c = 0; c < kMaxChannels; c++) {
+        for (uint32_t b = 0; b < kBins; b++) step.bin[c][b] = (to.bin[c][b] - from.bin[c][b]) / float(frames);
+    }
+    return step;
+}
+
+void UpdateMix(Voice& v, const Mix& step, uint32_t channels) {
+    for (uint32_t c = 0; c < channels; c++) {
+        for (uint32_t b = 0; b < kBins; b++) v.mix.bin[c][b] += step.bin[c][b];
+    }
 }
 
 // a stream goes quiet: the synch hold ends, a started one loses its pause as well
@@ -356,7 +379,10 @@ std::optional<Cursor> BufferFrame(Voice& v) {
 
 // adds the voice to the bins, frames of kBins interleaved
 void MixVoice(Voice& v, float* bins, uint32_t frames) {
-    Mix m = Levels(v);
+    Mix target = Levels(v);
+    if (!v.has_mix) v.mix = target;
+    v.has_mix = true;
+    Mix step = RampStep(v.mix, target, frames);
     uint32_t channels = std::min<uint32_t>(v.channels, kMaxChannels);
     double rate = double(v.freq ? v.freq : v.rate) / audio::kRate;
     for (uint32_t i = 0; i < frames; i++) {
@@ -366,12 +392,14 @@ void MixVoice(Voice& v, float* bins, uint32_t frames) {
         float x[kMaxChannels];
         for (uint32_t c = 0; c < channels; c++) x[c] = Sample(v, at->data, at->f, c);
         for (uint32_t c = 0; c < channels; c++) x[c] += (Sample(v, at->next_data, at->next_f, c) - x[c]) * t;
+        UpdateMix(v, step, channels);
         float* to = bins + i * kBins;
         for (uint32_t c = 0; c < channels; c++) {
-            for (uint32_t b = 0; b < kBins; b++) to[b] += x[c] * m.bin[c][b];
+            for (uint32_t b = 0; b < kBins; b++) to[b] += x[c] * v.mix.bin[c][b];
         }
         v.pos += rate;
     }
+    v.mix = target;
 }
 
 // the stereo mix of the bins: front, back and crosstalk bins on their side, the centre on both, no sub
@@ -697,6 +725,7 @@ BUFFER(SetBufferData, 3) {
     return 0;
 }
 BUFFER(Play, 4) {
+    v.has_mix = false;  // a new sound does not ramp from the last one's levels
     v.playing = true;
     v.looping = a[3] & 1;
     if (a[3] & 2) v.pos = 0;
@@ -913,6 +942,7 @@ STREAM(Process, 3) {
     if (pk.completed_ptr) W32(pk.completed_ptr, 0);
     if (pk.status_ptr) W32(pk.status_ptr, kPacketPending);
     v.packets.push_back(pk);
+    if (!v.active) v.has_mix = false;
     v.active = true;
     v.ending = false;
     return 0;
