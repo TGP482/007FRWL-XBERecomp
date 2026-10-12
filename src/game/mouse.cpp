@@ -25,7 +25,7 @@ constexpr float kRadiansPerCount = kDegreesPerCount * kRadiansPerDegree;
 constexpr float kMinSeconds = 1.0f / 240.0f;
 
 // views that turn with the mouse, each takes its own share of the motion
-enum class View { Chase, Jetpack, Turret, Scope, LockOn, Throw, Count };
+enum class View { Chase, Jetpack, Turret, Scope, LockOn, Throw, Copter, Count };
 
 struct Share {
     input::MouseMove move{};
@@ -143,6 +143,13 @@ constexpr int kThrowPitchReg = 0;
 
 input::MouseMove g_throw{};  // this update's motion
 
+// Q copter, the right stick turns it about its up axis at a rate that eases toward the stick; the mouse adds its
+// turn after the easing.
+
+constexpr int kCopterTurnReg = 0;  // xmm, the turn this step in radians
+
+input::MouseMove g_copter{};  // this frame's motion
+
 }  // namespace
 
 // each chase camera update, before it turns
@@ -236,4 +243,14 @@ void ThrowYaw(X86Context& ctx, uint8_t*) {
 
 void ThrowPitch(X86Context& ctx, uint8_t*) {
     ctx.xmm[kThrowPitchReg].f[0] -= g_throw.dy * kRadiansPerCount;
+}
+
+// the copter reads its sticks for the player in eax
+void CopterMouseTake(X86Context& ctx, uint8_t*) {
+    g_copter = TakeForPlayer(View::Copter, ctx.eax);
+}
+
+void CopterTurn(X86Context& ctx, uint8_t*) {
+    ctx.xmm[kCopterTurnReg].f[0] -= g_copter.dx * kRadiansPerCount;
+    g_copter = {};
 }

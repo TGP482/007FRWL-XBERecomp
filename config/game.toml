@@ -349,6 +349,15 @@ call = "ThrowYaw"
 at = 0x13D9D3
 call = "ThrowPitch"
 
+# Q copter: the mouse is taken where the copter reads its sticks, then joins the turn past the easing
+[[hook]]
+at = 0x1DDF4A
+call = "CopterMouseTake"
+
+[[hook]]
+at = 0x1D99DD
+call = "CopterTurn"
+
 # end of the frame render, after the HUD and before the frame is shown: the frame rate is drawn with the game text
 [[hook]]
 at = 0x34D094
