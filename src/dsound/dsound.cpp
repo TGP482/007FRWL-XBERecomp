@@ -9,7 +9,7 @@
 #include <optional>
 #include <vector>
 
-#include "audio/audio.h"
+#include "audio/output.h"
 #include "xbe/xbe.h"
 #include "xdk/hle.h"
 #include "xdk/layout.h"
@@ -617,14 +617,11 @@ void MixCrosstalk(float* bins, uint32_t frames) {
     }
 }
 
-// the stereo mix of the speaker bins: front and back on their side, the centre on both, no sub
-void FoldStereo(const float* bins, float* out, uint32_t frames) {
-    for (uint32_t i = 0; i < frames; i++) {
-        const float* b = bins + i * kBins;
-        float centre = 0.707f * b[kBinCentre];
-        out[i * 2] = b[kBinFrontLeft] + b[kBinBackLeft] + centre;
-        out[i * 2 + 1] = b[kBinFrontRight] + b[kBinBackRight] + centre;
-    }
+// speaker bins 0..5 are the output's channels in the same order
+static_assert(uint32_t(kBinBackRight) == uint32_t(audio::BackRight) && kSpeakerBins == audio::kChannels);
+void WriteSpeakers(const float* bins, float* out, uint32_t frames) {
+    constexpr size_t kBytes = audio::kChannels * sizeof(float);
+    for (uint32_t i = 0; i < frames; i++) std::memcpy(out + i * audio::kChannels, bins + i * kBins, kBytes);
 }
 
 void Render(float* out, uint32_t frames) {
@@ -637,7 +634,7 @@ void Render(float* out, uint32_t frames) {
     }
     g_reverb.Run(bins.data(), frames);
     MixCrosstalk(bins.data(), frames);
-    FoldStereo(bins.data(), out, frames);
+    WriteSpeakers(bins.data(), out, frames);
 }
 
 int64_t NowMs() {
@@ -800,7 +797,9 @@ HLE_STDCALL(IDirectSound_Release, 1) { return 0; }
 HLE_STDCALL(DirectSoundUseFullHRTF, 0) { return 0; }
 HLE_STDCALL(DirectSoundUseLightHRTF, 0) { return 0; }
 HLE_STDCALL(IDirectSound_GetSpeakerConfig, 2) {
-    W32(a[1], 0);  // DSSPEAKER_STEREO
+    constexpr uint32_t kStereo = 0;
+    constexpr uint32_t kSurroundAc3 = 0x2 | 0x10000;  // DSSPEAKER_SURROUND | DSSPEAKER_ENABLE_AC3
+    W32(a[1], audio::IsSurround() ? kSurroundAc3 : kStereo);
     return 0;
 }
 // (this, effect, offset, data, size, flags): writes the effect's state
