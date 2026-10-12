@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <deque>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include "audio/audio.h"
@@ -203,27 +204,59 @@ void Complete(Voice& v, Packet& pk, uint32_t status) {
     }
 }
 
-// gain of voice channel c on host left and right. A hardware voice holds two channels and owns a run of slots,
-// which alternate left and right.
-void Levels(Voice& v, float g[2][2]) {
-    static const uint8_t kFront[2] = {0, 1};
-    const uint8_t* bin = v.nbins ? v.bin : kFront;
-    uint32_t n = v.nbins ? v.nbins : 2, voices = (std::max<uint32_t>(v.channels, 1) - 1) / 2 + 1;
-    uint32_t per = std::max<uint32_t>(n / voices, 2), step = v.channels == 1 ? 1 : 2;
-    bool speakers = false;
-    for (uint32_t s = 0; s < n; s++) speakers |= bin[s] < 10 && bin[s] != 3;
-    for (uint32_t c = 0; c < 2; c++) {
-        g[c][0] = g[c][1] = 0;
-        for (uint32_t s = c; c < v.channels && s < per && s < n; s += step) {
+// DSMIXBIN numbers the host mixes
+enum MixBin : uint32_t {
+    kBinFrontLeft,
+    kBinFrontRight,
+    kBinCentre,
+    kBinSub,
+    kBinBackLeft,
+    kBinBackRight,
+    kBinCrosstalk,  // 6..9: crosstalk front left, front right, back left, back right
+};
+constexpr uint32_t kBins = 10;
+constexpr uint32_t kSpeakerBins = 6;
+constexpr uint32_t kMaxChannels = 8;
+
+// gain of each voice channel on each mix bin
+struct Mix {
+    float bin[kMaxChannels][kBins];
+};
+
+// The library gives every hardware voice (two channels) a run of n / voices slots and silences the slots of the
+// other voices. A stereo voice plays its left channel on even slots and its right on odd ones.
+uint32_t ChannelOfSlot(const Voice& v, uint32_t voice, uint32_t slot) {
+    uint32_t voice_channels = std::min<uint32_t>(v.channels - voice * 2, 2);
+    return voice * 2 + slot % voice_channels;
+}
+
+Mix SlotLevels(const Voice& v) {
+    // no mix bins given: two speakers in order for every hardware voice
+    static const uint8_t kSpeakers[kSpeakerBins] = {0, 1, 2, 3, 4, 5};
+    uint32_t voices = (v.channels - 1) / 2 + 1;
+    const uint8_t* bin = v.nbins ? v.bin : kSpeakers;
+    uint32_t n = v.nbins ? v.nbins : std::min(voices * 2, kSpeakerBins);
+    uint32_t per = n / voices;
+    Mix m = {};
+    for (uint32_t k = 0; k < voices; k++) {
+        for (uint32_t s = k * per; s < (k + 1) * per; s++) {
+            uint32_t c = ChannelOfSlot(v, k, s);
             uint32_t b = bin[s];
-            if (speakers && (b == 3 || b > 9)) continue;  // sub and effect sends
-            float x = Db(v.bin_mb[b]) * v.volume * v.headroom * (b == 2 ? 0.707f : 1.0f);
-            // even bins are left, odd right, 2 is the centre
-            if (!speakers || b == 2 || !(b & 1)) g[c][0] = std::max(g[c][0], x);
-            if (!speakers || b == 2 || (b & 1)) g[c][1] = std::max(g[c][1], x);
+            if (c < kMaxChannels && b < kBins) m.bin[c][b] += Db(v.bin_mb[b]) * v.volume * v.headroom;
         }
     }
-    if (!v.is3d || v.mode == 2) return;
+    return m;
+}
+
+// gain of a bin of a 3D voice: the centre and sub take distance alone, even bins are left, odd right
+float PanGain(uint32_t b, float att, float left, float right) {
+    if (b == kBinCentre || b == kBinSub) return att;
+    if (b & 1) return right;
+    return left;
+}
+
+// distance and the crude left/right pan of a 3D voice
+void Apply3D(const Voice& v, Mix& m) {
     bool rel = v.mode == 1;  // the position is already in listener space
     float d[3] = {v.p[0], v.p[1], v.p[2]};
     for (int i = 0; i < 3 && !rel; i++) d[i] -= g_listener[i];
@@ -242,10 +275,17 @@ void Levels(Voice& v, float g[2][2]) {
                       g_top[0] * g_front[1] - g_top[1] * g_front[0]};
     float side = rel ? d[0] : d[0] * right[0] + d[1] * right[1] + d[2] * right[2];
     float pan = dist > 1e-3f ? side / dist : 0.0f;
-    for (int c = 0; c < 2; c++) {
-        g[c][0] *= att * std::min(1.0f, 1.0f - pan);
-        g[c][1] *= att * std::min(1.0f, 1.0f + pan);
+    float left_gain = att * std::min(1.0f, 1.0f - pan);
+    float right_gain = att * std::min(1.0f, 1.0f + pan);
+    for (uint32_t c = 0; c < kMaxChannels; c++) {
+        for (uint32_t b = 0; b < kBins; b++) m.bin[c][b] *= PanGain(b, att, left_gain, right_gain);
     }
+}
+
+Mix Levels(const Voice& v) {
+    Mix m = SlotLevels(v);
+    if (v.is3d && v.mode != 2) Apply3D(v, m);
+    return m;
 }
 
 // a stream goes quiet: the synch hold ends, a started one loses its pause as well
@@ -254,73 +294,107 @@ void Deactivate(Voice& v) {
     if (v.active) v.active = v.paused = v.ending = false;
 }
 
+// where a frame and the one after it are read from, for interpolation
+struct Cursor {
+    uint32_t data;
+    uint32_t f;
+    uint32_t next_data;
+    uint32_t next_f;
+};
+
+// the stream's frame at its position, none once its packets ran out
+std::optional<Cursor> StreamFrame(Voice& v) {
+    uint32_t f = uint32_t(v.pos);
+    while (!v.packets.empty() && f >= FramesOf(v, v.packets.front().size)) {
+        Packet pk = v.packets.front();
+        v.packets.pop_front();
+        pk.used = pk.size;
+        Complete(v, pk, 0);
+        v.pos -= FramesOf(v, pk.size);
+        f = uint32_t(v.pos);
+    }
+    if (v.packets.empty()) {
+        v.pos = 0;
+        if (v.ending) Deactivate(v);
+        return std::nullopt;
+    }
+    Packet& pk = v.packets.front();
+    Cursor at = {pk.data, f, pk.data, f};
+    if (f + 1 < FramesOf(v, pk.size)) {
+        at.next_f = f + 1;
+    } else if (v.packets.size() > 1) {
+        at.next_data = v.packets[1].data;
+        at.next_f = 0;
+    }
+    return at;
+}
+
+// the buffer's frame at its position, none once it stopped
+std::optional<Cursor> BufferFrame(Voice& v) {
+    uint32_t f = uint32_t(v.pos);
+    uint32_t start = v.looping ? FramesOf(v, v.loop_start) : 0;
+    uint32_t end = FramesOf(v, v.looping ? v.loop_start + v.loop_len : v.play_len);
+    if (f >= end) {
+        if (!v.looping || end <= start) {
+            v.playing = false;
+            v.pos = 0;
+            return std::nullopt;
+        }
+        v.pos = start + std::fmod(v.pos - start, double(end - start));
+        f = uint32_t(v.pos);
+    }
+    if (!v.data) return std::nullopt;
+    uint32_t base = v.data + v.play_start;
+    Cursor at = {base, f, base, f};
+    if (f + 1 < end) {
+        at.next_f = f + 1;
+    } else if (v.looping) {
+        at.next_f = start;
+    }
+    return at;
+}
+
+// adds the voice to the bins, frames of kBins interleaved
+void MixVoice(Voice& v, float* bins, uint32_t frames) {
+    Mix m = Levels(v);
+    uint32_t channels = std::min<uint32_t>(v.channels, kMaxChannels);
+    double rate = double(v.freq ? v.freq : v.rate) / audio::kRate;
+    for (uint32_t i = 0; i < frames; i++) {
+        std::optional<Cursor> at = v.stream ? StreamFrame(v) : BufferFrame(v);
+        if (!at) break;
+        float t = float(v.pos - uint32_t(v.pos));
+        float x[kMaxChannels];
+        for (uint32_t c = 0; c < channels; c++) x[c] = Sample(v, at->data, at->f, c);
+        for (uint32_t c = 0; c < channels; c++) x[c] += (Sample(v, at->next_data, at->next_f, c) - x[c]) * t;
+        float* to = bins + i * kBins;
+        for (uint32_t c = 0; c < channels; c++) {
+            for (uint32_t b = 0; b < kBins; b++) to[b] += x[c] * m.bin[c][b];
+        }
+        v.pos += rate;
+    }
+}
+
+// the stereo mix of the bins: front, back and crosstalk bins on their side, the centre on both, no sub
+void FoldStereo(const float* bins, float* out, uint32_t frames) {
+    for (uint32_t i = 0; i < frames; i++) {
+        const float* b = bins + i * kBins;
+        float centre = 0.707f * b[kBinCentre];
+        float left = b[kBinFrontLeft] + b[kBinBackLeft] + b[kBinCrosstalk] + b[kBinCrosstalk + 2];
+        float right = b[kBinFrontRight] + b[kBinBackRight] + b[kBinCrosstalk + 1] + b[kBinCrosstalk + 3];
+        out[i * 2] = left + centre;
+        out[i * 2 + 1] = right + centre;
+    }
+}
+
 void Render(float* out, uint32_t frames) {
-    std::memset(out, 0, frames * 2 * sizeof(float));
+    static std::vector<float> bins;  // the output thread alone renders
+    bins.assign(frames * kBins, 0.0f);
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     for (auto& [obj, v] : g_voices) {
         if (v.paused || v.sync || (!v.stream && !v.playing)) continue;
-        float g[2][2];
-        Levels(v, g);
-        uint32_t base = v.data + v.play_start;
-        double step = double(v.freq ? v.freq : v.rate) / audio::kRate;
-        for (uint32_t i = 0; i < frames; i++) {
-            uint32_t f = uint32_t(v.pos);
-            float a, b, a1, b1;  // this frame and the next, interpolated between
-            if (v.stream) {
-                while (!v.packets.empty() && f >= FramesOf(v, v.packets.front().size)) {
-                    Packet pk = v.packets.front();
-                    v.packets.pop_front();
-                    pk.used = pk.size;
-                    Complete(v, pk, 0);
-                    v.pos -= FramesOf(v, pk.size);
-                    f = uint32_t(v.pos);
-                }
-                if (v.packets.empty()) {
-                    v.pos = 0;
-                    if (v.ending) Deactivate(v);
-                    break;
-                }
-                Packet& pk = v.packets.front();
-                a = Sample(v, pk.data, f, 0);
-                b = Sample(v, pk.data, f, 1);
-                if (f + 1 < FramesOf(v, pk.size)) {
-                    a1 = Sample(v, pk.data, f + 1, 0);
-                    b1 = Sample(v, pk.data, f + 1, 1);
-                } else if (v.packets.size() > 1) {
-                    a1 = Sample(v, v.packets[1].data, 0, 0);
-                    b1 = Sample(v, v.packets[1].data, 0, 1);
-                } else {
-                    a1 = a;
-                    b1 = b;
-                }
-            } else {
-                uint32_t start = v.looping ? FramesOf(v, v.loop_start) : 0;
-                uint32_t end = FramesOf(v, v.looping ? v.loop_start + v.loop_len : v.play_len);
-                if (f >= end) {
-                    if (!v.looping || end <= start) {
-                        v.playing = false;
-                        v.pos = 0;
-                        break;
-                    }
-                    v.pos = start + std::fmod(v.pos - start, double(end - start));
-                    f = uint32_t(v.pos);
-                }
-                if (!v.data) break;
-                a = Sample(v, base, f, 0);
-                b = Sample(v, base, f, 1);
-                uint32_t next = f + 1 < end ? f + 1 : v.looping ? start : f;
-                a1 = Sample(v, base, next, 0);
-                b1 = Sample(v, base, next, 1);
-            }
-            float t = float(v.pos - f);
-            a += (a1 - a) * t;
-            b += (b1 - b) * t;
-            out[i * 2] += a * g[0][0] + b * g[1][0];
-            out[i * 2 + 1] += a * g[0][1] + b * g[1][1];
-            v.pos += step;
-        }
+        MixVoice(v, bins.data(), frames);
     }
-    for (uint32_t i = 0; i < frames * 2; i++) out[i] = std::clamp(out[i], -1.0f, 1.0f);
+    FoldStereo(bins.data(), out, frames);
 }
 
 int64_t NowMs() {
