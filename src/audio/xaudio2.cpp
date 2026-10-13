@@ -31,6 +31,9 @@ constexpr DWORD kSourceSpeaker[kChannels] = {SPEAKER_FRONT_LEFT, SPEAKER_FRONT_R
                                              SPEAKER_LOW_FREQUENCY, SPEAKER_BACK_LEFT, SPEAKER_BACK_RIGHT};
 
 std::atomic<bool> g_surround{false};
+std::atomic<bool> g_mono{false};
+std::atomic<uint32_t> g_mode{kOutputAuto};
+std::atomic<bool> g_mode_changed{false};
 
 struct Output {
     IXAudio2* xa = nullptr;
@@ -43,6 +46,11 @@ bool HasSurround(DWORD mask) {
     bool back = (mask & kBack) == kBack;
     bool side = (mask & kSide) == kSide;
     return (mask & kFront) == kFront && (back || side);
+}
+
+bool WantSurround(uint32_t mode, DWORD mask) {
+    if (mode == kOutputAuto) return HasSurround(mask);
+    return mode == kOutputSurround;
 }
 
 WAVEFORMATEXTENSIBLE MixFormat() {
@@ -86,18 +94,21 @@ std::vector<float> SurroundMatrix(DWORD mask, uint32_t outputs) {
 }
 
 // L = FL + kCentreFold C + BL and R = FR + kCentreFold C + BR without the sub, on the first two outputs.
-// A mono master hears the average of the two.
-std::vector<float> FoldToStereo(uint32_t outputs) {
+// Mono, or a mono master, hears the average of the two.
+std::vector<float> FoldToStereo(uint32_t outputs, bool mono) {
     static const float kLeft[kChannels] = {1, 0, kCentreFold, 0, 1, 0};
     static const float kRight[kChannels] = {0, 1, kCentreFold, 0, 0, 1};
     std::vector<float> m(outputs * kChannels, 0.0f);
+    bool average = mono || outputs == 1;
     for (uint32_t s = 0; s < kChannels; s++) {
-        if (outputs == 1) {
-            m[s] = (kLeft[s] + kRight[s]) * 0.5f;
-            continue;
+        float left = kLeft[s];
+        float right = kRight[s];
+        if (average) {
+            left = (kLeft[s] + kRight[s]) * 0.5f;
+            right = left;
         }
-        m[s] = kLeft[s];
-        m[kChannels + s] = kRight[s];
+        m[s] = left;
+        if (outputs > 1) m[kChannels + s] = right;
     }
     return m;
 }
@@ -116,13 +127,22 @@ DWORD MasterMask(IXAudio2MasteringVoice* master, uint32_t outputs) {
     return mask;
 }
 
+const char* OutputName() {
+    if (g_mono) return "mono";
+    return g_surround ? "5.1" : "stereo";
+}
+
 void ApplyMatrix(Output& out) {
     uint32_t outputs = MasterOutputs(out.master);
     DWORD mask = MasterMask(out.master, outputs);
-    g_surround = HasSurround(mask);
-    std::vector<float> m = g_surround ? SurroundMatrix(mask, outputs) : FoldToStereo(outputs);
+    uint32_t mode = g_mode;
+    g_surround = WantSurround(mode, mask);
+    g_mono = mode == kOutputMono;
+    // a 5.1 mix on a device without 5.1 speakers is folded to stereo
+    bool own_speakers = g_surround && HasSurround(mask);
+    std::vector<float> m = own_speakers ? SurroundMatrix(mask, outputs) : FoldToStereo(outputs, g_mono);
     out.voice->SetOutputMatrix(out.master, kChannels, outputs, m.data());
-    LOGI("audio: %s output, %u device channels", g_surround ? "5.1" : "stereo", outputs);
+    LOGI("audio: %s output, %u device channels", OutputName(), outputs);
 }
 
 std::optional<Output> Open() {
@@ -141,6 +161,7 @@ void Pump(Output& out, const std::function<void(float*, uint32_t)>& render) {
     constexpr uint32_t kSlots = 4;
     std::vector<float> bufs(kSlots * kFrames * kChannels);
     for (uint32_t n = 0;;) {
+        if (g_mode_changed.exchange(false)) ApplyMatrix(out);
         XAUDIO2_VOICE_STATE st;
         out.voice->GetState(&st, XAUDIO2_VOICE_NOSAMPLESPLAYED);
         if (st.BuffersQueued >= 3) {
@@ -160,6 +181,12 @@ void Pump(Output& out, const std::function<void(float*, uint32_t)>& render) {
 }  // namespace
 
 bool IsSurround() { return g_surround; }
+
+bool IsMono() { return g_mono; }
+
+void SetOutputMode(uint32_t mode) {
+    if (g_mode.exchange(mode) != mode) g_mode_changed = true;
+}
 
 void StartOutput(std::function<void(float*, uint32_t)> render) {
     std::promise<void> opened;

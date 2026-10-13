@@ -11,6 +11,7 @@
 #include <toml++/toml.hpp>
 
 #include "app/app.h"
+#include "audio/output.h"
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
@@ -116,6 +117,7 @@ void Save(void* table) {
 
 void Init() {
     input::LoadBindings();
+    audio::SetOutputMode(Opt().audio_output);
     RemoveUnfinishedSaves();
 }
 
@@ -144,6 +146,7 @@ const app::GameInfo app::kGame = {
         {"skip_intros", &game::Opt().skip_intros, nullptr},
         {"fps_counter", &game::Opt().fps_counter, nullptr},
         {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},
+        {"audio_output", nullptr, &game::Opt().audio_output},
     },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it

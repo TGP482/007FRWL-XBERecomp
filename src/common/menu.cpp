@@ -22,6 +22,7 @@
 #include <imgui.h>
 
 #include "app/app.h"
+#include "audio/output.h"
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
@@ -85,6 +86,9 @@ constexpr uint32_t kAnisoValues[] = {0, 2, 4, 8, 16};
 const char* const kAnisoNames[] = {"GAME DEFAULT", "2x", "4x", "8x", "16x"};
 constexpr uint32_t kAoValues[] = {0, 1, 2};
 const char* const kAoNames[] = {"OFF", "SSAO", "GTAO"};
+constexpr uint32_t kAudioOutputs[] = {audio::kOutputAuto, audio::kOutputMono, audio::kOutputStereo,
+                                      audio::kOutputSurround};
+const char* const kAudioOutputNames[] = {"AUTOMATIC", "MONO", "2.0 STEREO", "5.1 SURROUND"};
 constexpr uint32_t kFpsCaps[] = {30, 60, 75, 90, 120, 144, 165, 240, 360, 0};
 const char* const kDisplayModeNames[] = {"FULLSCREEN", "BORDERLESS", "WINDOWED"};
 constexpr int kDisplayModeCount = int(std::size(kDisplayModeNames));
@@ -244,6 +248,13 @@ std::string StepAmbientOcclusion(Settings&, int step) {
     return kAoNames[StepTable(kAoValues, game::Opt().ambient_occlusion, step)];
 }
 
+std::string StepAudioOutput(Settings&, int step) {
+    uint32_t& mode = game::Opt().audio_output;
+    int i = StepTable(kAudioOutputs, mode, step);
+    audio::SetOutputMode(mode);
+    return kAudioOutputNames[i];
+}
+
 std::string StepSkipIntros(Settings&, int step) {
     bool& on = game::Opt().skip_intros;
     if (step) on = !on;
@@ -295,6 +306,7 @@ enum RowId {
     kInvertLookRow,
     kCameraCentringRow,
     kAmbientOcclusionRow,
+    kAudioOutputRow,
 };
 
 // in RowId order
@@ -311,6 +323,7 @@ constexpr StepFn kSteps[] = {
     StepInvertLook,
     StepCameraCentring,
     StepAmbientOcclusion,
+    StepAudioOutput,
 };
 
 bool Held(int id) { return id == kDisplayModeRow || id == kResolutionRow; }
@@ -331,6 +344,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kAmbientOcclusionRow, "AMBIENT OCCLUSION"},
     {Kind::Heading, -1, "GENERAL"},
     {Kind::Value, kSkipIntrosRow, "SKIP INTROS"},
+    {Kind::Value, kAudioOutputRow, "AUDIO OUTPUT"},
 };
 
 // the mouse rows, then a bind row for each input action
@@ -576,6 +590,8 @@ void RestoreDefaults(int page) {
         const game::Options defaults;
         game::Opt().skip_intros = defaults.skip_intros;
         game::Opt().fps_counter = defaults.fps_counter;
+        game::Opt().audio_output = defaults.audio_output;
+        audio::SetOutputMode(defaults.audio_output);
         RestoreSettingsDefaults();
     } else {
         const game::Options defaults;
