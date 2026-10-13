@@ -20,6 +20,7 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 - **Render Resolution** - Renders the game at a percentage of the output resolution, allowing supersampling or downscaling independent of the window size.
 - **Max Frame Rate** - Caps the frame rate to a custom value, or removes the cap entirely.
 - **V-Sync** - Reduces screen tearing.
+- **HDR Output** - Enables HDR10 output on displays with Windows HDR turned on, detected automatically. Highlights extend up to the display's peak brightness.
 
 ### Graphics
 - **Anisotropic Filtering** - Forces the selected anisotropic filtering level on all textures.

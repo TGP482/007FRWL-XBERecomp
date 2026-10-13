@@ -145,6 +145,7 @@ const app::GameInfo app::kGame = {
         {"camera_centring", &game::Opt().camera_centring, nullptr},
         {"skip_intros", &game::Opt().skip_intros, nullptr},
         {"fps_counter", &game::Opt().fps_counter, nullptr},
+        {"hdr_output", &game::Opt().hdr_output, nullptr},
         {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},
         {"audio_output", nullptr, &game::Opt().audio_output},
     },

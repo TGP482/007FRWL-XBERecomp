@@ -9,6 +9,7 @@ namespace game {
 struct Options {
     bool skip_intros = false;
     bool fps_counter = false;
+    bool hdr_output = true;  // HDR10 on a display with Windows HDR on
     bool invert_mouse = false;
     bool camera_centring = false;  // the chase camera swings back behind Bond on keyboard and mouse
     uint32_t ambient_occlusion = 0;  // screen space, from the scene's depth: 0 off, 1 SSAO, 2 GTAO
@@ -18,5 +19,6 @@ struct Options {
 };
 Options& Opt();
 inline std::atomic<float> g_fps{0};  // from the host, for the game's own counter
+inline std::atomic<bool> g_hdr_display{false};  // the window's display has Windows HDR on, from the renderer
 
 }  // namespace game

@@ -231,6 +231,12 @@ std::string StepVsync(Settings& s, int step) {
     return OnOff(s.vsync);
 }
 
+std::string StepHdrOutput(Settings&, int step) {
+    bool& on = game::Opt().hdr_output;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
 std::string StepMaxFps(Settings& s, int step) {
     uint32_t cap = kFpsCaps[StepTable(kFpsCaps, s.fps_cap, step)];
     return cap ? std::to_string(cap) : "UNLIMITED";
@@ -307,6 +313,7 @@ enum RowId {
     kCameraCentringRow,
     kAmbientOcclusionRow,
     kAudioOutputRow,
+    kHdrOutputRow,
 };
 
 // in RowId order
@@ -324,9 +331,13 @@ constexpr StepFn kSteps[] = {
     StepCameraCentring,
     StepAmbientOcclusion,
     StepAudioOutput,
+    StepHdrOutput,
 };
 
 bool Held(int id) { return id == kDisplayModeRow || id == kResolutionRow; }
+
+// shown dimmed and left as it is: HDR output without an HDR display
+bool Greyed(int id) { return id == kHdrOutputRow && !game::g_hdr_display; }
 
 using rows::Kind;
 using rows::Row;
@@ -337,6 +348,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kResolutionRow, "RESOLUTION"},
     {Kind::Value, kRenderResolutionRow, "RENDER RESOLUTION"},
     {Kind::Value, kVsyncRow, "VERTICAL SYNC"},
+    {Kind::Value, kHdrOutputRow, "HDR OUTPUT"},
     {Kind::Value, kMaxFpsRow, "MAX FRAME RATE"},
     {Kind::Value, kFpsCounterRow, "FPS COUNTER"},
     {Kind::Heading, -1, "GRAPHICS"},
@@ -504,9 +516,13 @@ void DrawHeading(const char* title) {
 
 void DrawValueRow(const Row& row) {
     bool held = Held(row.id);
+    bool greyed = Greyed(row.id);
     Settings& shown = held && g_display_held ? g_display : Get();
-    int step = OptionRow(row.label, kSteps[row.id](shown, 0).c_str());
-    if (step == 0) return;
+    std::string value = greyed ? "NOT SUPPORTED" : kSteps[row.id](shown, 0);
+    ImGui::BeginDisabled(greyed);
+    int step = OptionRow(row.label, value.c_str());
+    ImGui::EndDisabled();
+    if (step == 0 || greyed) return;
     if (held) {
         ApplyHeldStep(row, step);
     } else {
@@ -590,6 +606,7 @@ void RestoreDefaults(int page) {
         const game::Options defaults;
         game::Opt().skip_intros = defaults.skip_intros;
         game::Opt().fps_counter = defaults.fps_counter;
+        game::Opt().hdr_output = defaults.hdr_output;
         game::Opt().audio_output = defaults.audio_output;
         audio::SetOutputMode(defaults.audio_output);
         RestoreSettingsDefaults();
@@ -723,6 +740,7 @@ std::string rows::Value(const Row& row, int step) {
     if (row.kind == Kind::Bind && g_capture.action == row.id) return "PRESS A KEY";
     if (row.kind == Kind::Bind) return KeyText(input::Binding(size_t(row.id)));
     if (row.kind != Kind::Value) return {};
+    if (Greyed(row.id)) return "NOT SUPPORTED";
     std::string text = kSteps[row.id](Get(), step);
     if (step == 0) return text;
     if (Held(row.id)) ApplyDisplay();
