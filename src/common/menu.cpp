@@ -153,7 +153,7 @@ int StepTable(const uint32_t (&values)[N], uint32_t& value, int step) {
 
 bool SameMode(Mode a, Mode b) { return a.width == b.width && a.height == b.height; }
 
-// every mode the monitor reports, largest first
+// every mode the monitor reports, smallest first so Left steps down
 const std::vector<Mode>& Modes() {
     static const std::vector<Mode> modes = [] {
         std::vector<Mode> list;
@@ -165,11 +165,11 @@ const std::vector<Mode>& Modes() {
             bool known = std::any_of(list.begin(), list.end(), [&](Mode other) { return SameMode(other, mode); });
             if (!known) list.push_back(mode);
         }
-        auto larger = [](Mode a, Mode b) {
-            if (a.width != b.width) return a.width > b.width;
-            return a.height > b.height;
+        auto smaller = [](Mode a, Mode b) {
+            if (a.width != b.width) return a.width < b.width;
+            return a.height < b.height;
         };
-        std::sort(list.begin(), list.end(), larger);
+        std::sort(list.begin(), list.end(), smaller);
         return list;
     }();
     return modes;
