@@ -798,6 +798,8 @@ private:
     void ApplyOverlayBias(const DrawShaders& sh, PsoKey& k) const;
     ID3D12PipelineState* EnsurePipeline(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps);
     void FillPipelineDesc(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps, D3D12_GRAPHICS_PIPELINE_STATE_DESC& d) const;
+    void ExpandPoints(D3D12_GRAPHICS_PIPELINE_STATE_DESC& d);
+    float PointScale() const;  // host pixels per console pixel of the bound target
     void UploadConstants(const State& s, const DrawShaders& sh, const PsoKey& k, const DrawTextures& stages,
                          GuestExtent size, DrawConstants& c);
     void FillTextureConstants(const State& s, const DrawTextures& stages, DrawConstants& c);
@@ -1809,6 +1811,23 @@ void D3D12Backend::FillPipelineDesc(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps,
     d.SampleDesc.Count = 1;
 }
 
+// a point is drawn as its whole console pixel by a geometry shader, solid, front facing and never culled
+void D3D12Backend::ExpandPoints(D3D12_GRAPHICS_PIPELINE_STATE_DESC& d) {
+    uint64_t hash;
+    ID3DBlob* gs = Compile(PointHlsl(), "main", "gs_5_0", hash);
+    if (!gs) return;
+    d.GS = {gs->GetBufferPointer(), gs->GetBufferSize()};
+    d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    d.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    d.RasterizerState.FrontCounterClockwise = FALSE;
+}
+
+float D3D12Backend::PointScale() const {
+    const Target* t = bound_rt_ ? bound_rt_ : bound_ds_;
+    if (!t || !t->gw) return 1;
+    return float(t->w) / float(t->gw);
+}
+
 ID3D12PipelineState* D3D12Backend::EnsurePipeline(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps) {
     uint64_t h = Hash(&k, sizeof(k));
     auto it = psos_.find(h);
@@ -1818,6 +1837,7 @@ ID3D12PipelineState* D3D12Backend::EnsurePipeline(const PsoKey& k, ID3DBlob* vs,
     D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
     d.InputLayout = {el, n};
     FillPipelineDesc(k, vs, ps, d);
+    if (k.topo == uint32_t(Topology::Points)) ExpandPoints(d);
     ComPtr<ID3D12PipelineState> pso;
     g_perf.psos++;
     if (FAILED(dev_->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&pso)))) LOGE("d3d12: pipeline creation failed");
@@ -2123,8 +2143,9 @@ DrawShaders ClassifyShaders(const State& s, const Assembled& a, uint32_t count) 
     DrawShaders sh;
     // a shader made from a declaration alone (no program) is the fixed function pipeline on those inputs
     sh.prog = (s.vs_handle & 1) && s.vs && !s.vs->program.empty();
-    // up to a quad with no depth test: it may be a pass over the whole target, see QuadHlsl
-    sh.quad = count <= kQuadVertices && !s.rs[kRsZEnable];
+    // up to a quad with no depth test: it may be a pass over the whole target, see QuadHlsl; points never are
+    bool points = a.topology == Topology::Points;
+    sh.quad = count <= kQuadVertices && !s.rs[kRsZEnable] && !points;
     sh.fixed_transform = !sh.prog && !a.pretransformed;
     if (!sh.prog) sh.fk = MakeFixedKey(s);
     return sh;
@@ -2469,6 +2490,8 @@ void D3D12Backend::UploadConstants(const State& s, const DrawShaders& sh, const 
     std::memcpy(vc.cpu, s.vsc.data(), sizeof(s.vsc));
     Alloc dc = Upload(sizeof(DrawConstants), 256);
     FillSurfaceConstants(s, size, c);
+    // points: host pixels per console pixel, also keeps them off the far edge pull out of screen passes
+    if (k.topo == uint32_t(Topology::Points)) c.surf[3] = PointScale();
     FillFogConstants(s, sh.prog, c);
     FillCombinerConstants(s, c);
     if (ext_) ext_->Constants(reinterpret_cast<float(*)[4]>(vc.cpu), c.ext, bound_rt_, k.blend ? k.src : 1);
