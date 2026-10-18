@@ -223,7 +223,8 @@ void ScopeAim(X86Context& ctx, uint8_t*) {
     float yaw_rate = G<float>(ctx.esp + kScopeYawRate);
     float pitch_rate = G<float>(ctx.esp + kScopePitchRate);
     ctx.xmm[kScopeStickXReg].f[0] += StickForTurn(move.dx * kRadiansPerCount, yaw_rate, seconds);
-    G<float>(ctx.esp + kScopeStickY) += StickForTurn(-move.dy * kRadiansPerCount, pitch_rate, seconds);
+    // a positive stick y lowers the scope, as it lowers the chase camera
+    G<float>(ctx.esp + kScopeStickY) += StickForTurn(move.dy * kRadiansPerCount, pitch_rate, seconds);
 }
 
 void LockOnAim(X86Context& ctx, uint8_t*) {
@@ -241,8 +242,9 @@ void ThrowYaw(X86Context& ctx, uint8_t*) {
     ctx.xmm[kThrowYawReg].f[0] -= g_throw.dx * kRadiansPerCount;
 }
 
+// the pitch grows with the stick y, so a positive pitch lowers the throw
 void ThrowPitch(X86Context& ctx, uint8_t*) {
-    ctx.xmm[kThrowPitchReg].f[0] -= g_throw.dy * kRadiansPerCount;
+    ctx.xmm[kThrowPitchReg].f[0] += g_throw.dy * kRadiansPerCount;
 }
 
 // the copter reads its sticks for the player in eax
