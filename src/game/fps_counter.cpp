@@ -43,6 +43,11 @@ constexpr uint32_t kSetTextCamera = 0x355E60;  // thiscall (camera)
 constexpr uint32_t kManagerDepth = 0x2C;
 constexpr uint32_t kOverlayDepth = 0x84C6D8;  // float the HUD copies into the text manager
 
+// RenderWare's record of the texture bound on stage 0; the game's own SetTexture calls do not update it, so a record
+// that still names the font would leave another texture bound under the text
+constexpr uint32_t kAppliedTexture = 0x810D8C;
+constexpr uint32_t kNoTexture = 0xFFFFFFFF;
+
 struct RenderState {
     uint32_t state;
     uint32_t value;
@@ -107,6 +112,7 @@ void BeginOverlay(X86Context& ctx, uint32_t manager, uint32_t camera) {
     CallGuest(ctx, kSetViewWindow2d, {Bits(0.0f), Bits(0.0f), Bits(1.0f), Bits(1.0f)});
     uint32_t render_state_set = R32(kRenderStateSet);
     for (RenderState rs : kOverlayStates) CallGuest(ctx, render_state_set, {rs.state, rs.value});
+    W32(kAppliedTexture, kNoTexture);
     CallGuest(ctx, kPushMatrix2d, {});
     CallGuest(ctx, kIdentity2d, {});
     ctx.ecx = manager;
