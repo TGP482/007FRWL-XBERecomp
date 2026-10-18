@@ -6,6 +6,9 @@
 // the game's own settings, in the settings file through app::kGame.options
 namespace game {
 
+// the languages the recomp text has: English, French, German, Italian, Spanish
+inline constexpr const char* kLanguages[] = {"int", "fra", "deu", "ita", "esp"};
+
 struct Options {
     bool skip_intros = false;
     bool fps_counter = false;
@@ -23,6 +26,7 @@ struct Options {
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };
 Options& Opt();
+const char* ShownLanguage();  // language.cpp
 inline std::atomic<float> g_fps{0};  // from the host, for the game's own counter
 inline std::atomic<bool> g_hdr_display{false};  // the window's display has Windows HDR on, from the renderer
 inline std::atomic<bool> g_hide_hud{false};  // the toggle HUD key: the HUD is not drawn

@@ -28,6 +28,7 @@
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
+#include "common/translations.h"
 
 namespace app {
 
@@ -532,7 +533,7 @@ int FocusedStep(const RowLayout& row) {
 void DrawLabel(const RowLayout& row, const char* label) {
     ImGui::SetCursorPos(ImVec2(row.origin.x + ImGui::GetStyle().ItemInnerSpacing.x, row.origin.y));
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    ImGui::TextUnformatted(Ui(label).c_str());
 }
 
 void DrawValueText(const RowLayout& row, const char* value) {
@@ -577,7 +578,7 @@ void DrawHeading(const char* title) {
     float em = ImGui::GetFontSize();
     ImGui::Dummy(ImVec2(0, em * kHeadingGapEms));
     ImGui::PushStyleColor(ImGuiCol_Text, kHeading);
-    ImGui::TextUnformatted(title);
+    ImGui::TextUnformatted(Ui(title).c_str());
     ImGui::PopStyleColor();
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, em * kHeadingAfterEms));
@@ -589,7 +590,7 @@ void DrawValueRow(const Row& row) {
     Settings& shown = held && g_display_held ? g_display : Get();
     std::string value = greyed ? "NOT SUPPORTED" : kSteps[row.id](shown, 0);
     ImGui::BeginDisabled(greyed);
-    int step = OptionRow(row.label, value.c_str());
+    int step = OptionRow(row.label, Ui(value).c_str());
     ImGui::EndDisabled();
     if (step == 0 || greyed) return;
     if (held) {
@@ -675,12 +676,13 @@ BoxInput DrawKeyBox(const RowLayout& row, const KeyBox& box, const std::string& 
     bool lit = box.capturing || ImGui::IsItemFocused() || ImGui::IsItemHovered();
     ImU32 fill = ImGui::GetColorU32(lit ? ImGuiCol_Header : ImGuiCol_FrameBg);
     ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), fill);
-    const char* text = box.capturing ? "PRESS A KEY" : key.c_str();
-    float centred = (box.width - ImGui::CalcTextSize(text).x) * 0.5f;
+    std::string text = key == kUnbound ? Ui(key) : key;  // key names as they are
+    if (box.capturing) text = Ui("PRESS A KEY");
+    float centred = (box.width - ImGui::CalcTextSize(text.c_str()).x) * 0.5f;
     ImGui::SetCursorPos(ImVec2(box.x + std::max(centred, 0.0f), row.origin.y));
     ImGui::AlignTextToFramePadding();
     if (box.capturing) ImGui::PushStyleColor(ImGuiCol_Text, kHeading);
-    ImGui::TextUnformatted(text);
+    ImGui::TextUnformatted(text.c_str());
     if (box.capturing) ImGui::PopStyleColor();
     return seen;
 }
@@ -775,7 +777,8 @@ int TabStep() {
 void DrawTab(int page, float width, bool stepped) {
     ImGui::SetNextItemWidth(width);
     ImGuiTabItemFlags flags = stepped && page == g_page ? ImGuiTabItemFlags_SetSelected : 0;
-    if (!ImGui::BeginTabItem(kPages[page], nullptr, flags)) return;
+    std::string tab = Ui(kPages[page]) + "###" + kPages[page];
+    if (!ImGui::BeginTabItem(tab.c_str(), nullptr, flags)) return;
     bool clicked = !stepped && page != g_page;
     if (clicked) {
         g_page = page;
@@ -805,10 +808,10 @@ void DrawTabs() {
 }
 
 void DrawTitle() {
-    const char* title = "SETTINGS";
-    float spare = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(title).x;
+    std::string title = Ui("SETTINGS");
+    float spare = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(title.c_str()).x;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(spare * 0.5f, 0.0f));
-    ImGui::TextUnformatted(title);
+    ImGui::TextUnformatted(title.c_str());
 }
 
 void DrawHint() {
@@ -819,7 +822,7 @@ void DrawHint() {
         hint = "Right click or Delete clears the key";
     }
     ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    ImGui::TextUnformatted(hint);
+    ImGui::TextUnformatted(Ui(hint, false).c_str());
     ImGui::PopStyleColor();
 }
 
@@ -829,12 +832,12 @@ void DrawFooter() {
     float spacing = ImGui::GetStyle().ItemSpacing.x;
     float spare = ImGui::GetContentRegionAvail().x - button_width * kFooterButtons - spacing * (kFooterButtons - 1);
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(spare, 0.0f));
-    if (ImGui::Button("Back", ImVec2(button_width, 0))) ToggleMenu();
+    if (ImGui::Button(Ui("Back", false).c_str(), ImVec2(button_width, 0))) ToggleMenu();
     ImGui::SameLine();
-    if (ImGui::Button("Defaults", ImVec2(button_width, 0))) RestoreDefaults(g_page);
+    if (ImGui::Button(Ui("Defaults", false).c_str(), ImVec2(button_width, 0))) RestoreDefaults(g_page);
     ImGui::SameLine();
     ImGui::BeginDisabled(!g_display_held);
-    if (ImGui::Button("Apply", ImVec2(button_width, 0))) Apply();
+    if (ImGui::Button(Ui("Apply", false).c_str(), ImVec2(button_width, 0))) Apply();
     ImGui::EndDisabled();
 }
 

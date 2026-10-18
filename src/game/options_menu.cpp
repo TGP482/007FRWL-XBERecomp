@@ -6,10 +6,12 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
+#include "common/translations.h"
 #include "game/options_menu.h"
 #include "core/log.h"
 #include "xdk/hle.h"
@@ -218,14 +220,36 @@ const Row* PageRow(int index) {
     return index >= 0 && index < int(rows.size()) ? rows[size_t(index)] : nullptr;
 }
 
+// the recomp's text in the language the game shows, one Latin 1 byte a character as the game's own text is; the
+// translations are all Latin 1, two UTF-8 bytes at most
+std::string MenuText(std::string_view english) {
+    std::string utf8 = app::Ui(english);
+    std::string text;
+    for (size_t i = 0; i < utf8.size(); i++) {
+        uint8_t c = uint8_t(utf8[i]);
+        bool pair = (c & 0xE0) == 0xC0 && i + 1 < utf8.size();
+        if (!pair) {
+            text += char(c);
+            continue;
+        }
+        text += char((c & 0x1F) << 6 | (uint8_t(utf8[i + 1]) & 0x3F));
+        i++;
+    }
+    return text;
+}
+
 std::string RowLabel(int index) {
     const Row* row = PageRow(index);
-    return row ? row->label : kDefaultsLabel;
+    return MenuText(row ? row->label : kDefaultsLabel);
 }
 
 std::string RowValue(int index) {
     const Row* row = PageRow(index);
-    return row ? app::rows::Value(*row) : std::string();
+    if (!row) return std::string();
+    std::string value = app::rows::Value(*row);
+    // key names as they are
+    bool keys = row->kind == Kind::Bind && value != "UNBOUND" && value != "PRESS A KEY";
+    return keys ? value : MenuText(value);
 }
 
 // The screen.
@@ -623,7 +647,7 @@ void DrawCopy(X86Context& ctx, uint32_t field, const Field& seen, const Copy& co
 // the scrolled list: the stock rows' own texts moved up a slot each, then the entries
 std::string ListText(int row, Part part) {
     if (row < g_layout.stock) return g_layout.text[size_t(row)][part];
-    return part == kLabel ? kEntries[row - g_layout.stock] : "";
+    return part == kLabel ? MenuText(kEntries[row - g_layout.stock]) : "";
 }
 
 void DrawList(X86Context& ctx, uint32_t field, const Field& seen) {
