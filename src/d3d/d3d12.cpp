@@ -329,13 +329,16 @@ float4 psmain() : SV_Target { return colour; }
 // from the scene's depth: occlusion pass, then a blur across and one down that multiplies it into the colour.
 // The sky writes no depth and stays at the clear: a pixel's samples there span less than one pixel and it stays lit
 const char* kAoHlsl = R"(
-cbuffer A : register(b1) { float4 proj; float4 zp; float4 vp; float4 opt; float4 fog; };
+cbuffer A : register(b1) { float4 proj; float4 zp; float4 vp; float4 opt; float4 fog; float4 fogcolor; };
+// stencil bit 7: a blended or alpha tested surface wrote the depth last, it counts as the far plane like the sky
 #ifdef MS
 Texture2DMS<float> depth : register(t0);
-float Raw(int2 p) { return depth.Load(p, 0); }
+Texture2DMS<uint2> stencil : register(t2);
+float Raw(int2 p) { return stencil.Load(p, 0).g & 0x80 ? 1 : depth.Load(p, 0); }
 #else
 Texture2D<float> depth : register(t0);
-float Raw(int2 p) { return depth.Load(int3(p, 0)); }
+Texture2D<uint2> stencil : register(t2);
+float Raw(int2 p) { return stencil.Load(int3(p, 0)).g & 0x80 ? 1 : depth.Load(int3(p, 0)); }
 #endif
 Texture2D<float2> ao : register(t1);
 float4 vs(uint id : SV_VertexID) : SV_Position {
@@ -454,16 +457,16 @@ float2 occlusion_blur(float4 pos : SV_Position) : SV_Target {
     float a = Smooth(pos.xy, z);
     return float2(a, z);
 }
-// fog: the game's, already drawn over the scene, fades the occlusion out as it thickens
+// the fog is already drawn: only the scene share under it is occluded, blended as colour * a + rgb
 float4 occlusion_apply(float4 pos : SV_Position) : SV_Target {
     float z;
     float a = Smooth(pos.xy, z);
     float fogged = min(saturate(fog.x * z + fog.y), fog.z);
-    return float4(lerp(a, 1, fogged).xxx, 1);
+    return float4(fogcolor.rgb * fogged * (1 - a), a);
 }
 )";
 constexpr int kAoTargets = 2;
-constexpr int kAoConstants = 20;  // kAoHlsl's b1
+constexpr int kAoConstants = 24;  // kAoHlsl's b1
 constexpr DXGI_FORMAT kAoFormat = DXGI_FORMAT_R16G16_FLOAT;
 constexpr float kAoRadius = 0.8f;    // world units, the engine's are metres
 constexpr float kAoMaxSpan = 0.15f;  // of the view's height, the most one pixel's samples may cover
@@ -479,7 +482,7 @@ D3D12_RECT ViewRect(const Viewport& v, const Target& t) {
     return r;
 }
 
-// b1 of kAoHlsl: proj, zp with the viewport's depth range, vp, opt (its step written per pass), fog
+// b1 of kAoHlsl: proj, zp with the viewport's depth range, vp, opt (its step written per pass), fog, fog colour
 void OcclusionConstants(const Viewport& v, const D3D12_RECT& r, const float p[4 * kOcclusionRects],
                         float c[kAoConstants]) {
     float zr = v.max_z - v.min_z;
@@ -487,16 +490,16 @@ void OcclusionConstants(const Viewport& v, const D3D12_RECT& r, const float p[4 
     float h = float(r.bottom - r.top);
     const float out[kAoConstants] = {p[0], p[1], p[2], p[3], p[4] * zr, v.min_z + p[5] * zr, 0, 0,
                                      float(r.left), float(r.top), w, h, kAoRadius, kAoMaxSpan * h, 0, 0,
-                                     p[8], p[9], p[10], 0};
+                                     p[8], p[9], p[10], 0, p[12], p[13], p[14], 0};
     std::memcpy(c, out, sizeof(out));
 }
 
-// dst = dst * src; the alpha the game's blends read stays
-void MultiplyBlend(D3D12_RENDER_TARGET_BLEND_DESC& b) {
+// dst = dst * src.a + src; the alpha the game's blends read stays
+void OcclusionBlend(D3D12_RENDER_TARGET_BLEND_DESC& b) {
     b.BlendEnable = TRUE;
-    b.SrcBlend = D3D12_BLEND_ZERO;
+    b.SrcBlend = D3D12_BLEND_ONE;
     b.SrcBlendAlpha = D3D12_BLEND_ZERO;
-    b.DestBlend = D3D12_BLEND_SRC_COLOR;
+    b.DestBlend = D3D12_BLEND_SRC_ALPHA;
     b.DestBlendAlpha = D3D12_BLEND_ONE;
     b.BlendOp = D3D12_BLEND_OP_ADD;
     b.BlendOpAlpha = D3D12_BLEND_OP_ADD;
@@ -708,7 +711,8 @@ struct PsoKey {
     int32_t zbias;
     float zslope;
     uint32_t rtfmt;
-    uint32_t msaa;  // samples of a multisampled target, 0 without
+    uint32_t msaa;     // samples of a multisampled target, 0 without
+    uint32_t ao_mark;  // the stencil holds ambient occlusion's mark, not the game's state
 };
 
 // Blit's settings past the source and its rectangle
@@ -887,6 +891,7 @@ private:
     void EnsurePixelShader(const PixelKey& pk, DrawShaders& sh);
     void BuildPipelineKey(const State& s, const Assembled& a, uint64_t vh, uint64_t ph, PsoKey& k);
     void KeyDepthStencil(const State& s, const Assembled& a, PsoKey& k);
+    bool MarksOcclusion(const PsoKey& k) const;
     void ApplyOverlayBias(const DrawShaders& sh, PsoKey& k) const;
     ID3D12PipelineState* EnsurePipeline(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps);
     void FillPipelineDesc(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps, D3D12_GRAPHICS_PIPELINE_STATE_DESC& d) const;
@@ -907,7 +912,7 @@ private:
     void SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages);
     uint32_t EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp);
     void SetViewportScissor(const State& s, uint32_t gw);
-    void SetBlendFactorStencilRef(const State& s);
+    void SetBlendFactorStencilRef(const State& s, const PsoKey& k);
     void DrawGeometry(const Assembled& a);
     void UploadVertexBuffers(const Assembled& a);
     // shaders by source hash: Compile returns the bytecode and sets hash
@@ -1087,6 +1092,7 @@ private:
     D3D12_RESOURCE_STATES ao_state_[kAoTargets] = {};
     uint32_t ao_w_ = 0;
     uint32_t ao_h_ = 0;
+    uint64_t ao_frame_ = 0;  // presents_ plus one when the pass last ran, 0 before it ever did
     Extension* ext_ = nullptr;
     // one frame capture: every draw in a text file, each target as the frame leaves it, the textures it read
     FILE* cap_ = nullptr;
@@ -2422,6 +2428,36 @@ void KeyBlend(const State& s, PsoKey& k) {
 
 constexpr float kDepth24Max = 16777215.0f;  // 2^24 minus 1: a 24 bit depth buffer's units per 1.0
 
+// stencil bit 7 marks a blended or alpha tested surface for the occlusion pass; the game never tests stencil
+constexpr uint32_t kAoStencilBit = 0x80;
+constexpr uint32_t kStencilAlways = 0x207;    // D3DCMP_ALWAYS
+constexpr uint32_t kStencilKeep = 0x1E00;     // D3DSTENCILOP_KEEP
+constexpr uint32_t kStencilReplace = 0x1E01;  // D3DSTENCILOP_REPLACE
+constexpr uint32_t kAlphaKillEnable = 4;      // D3DTALPHAKILL_ENABLE
+
+bool D3D12Backend::MarksOcclusion(const PsoKey& k) const {
+    if (ao_frame_ == 0 || ao_frame_ != presents_ || k.sten || !k.zen || !k.zwrite) return false;
+    return bound_ds_ && bound_ds_->gw == guest_w_ && bound_ds_->gh == guest_h_;
+}
+
+void KeyOcclusionMark(PsoKey& k) {
+    k.ao_mark = 1;
+    k.sten = 1;
+    k.sfunc = kStencilAlways;
+    k.swmask = kAoStencilBit;
+    k.sfail = kStencilKeep;
+    k.szfail = kStencilKeep;
+    k.spass = kStencilReplace;
+}
+
+bool Translucent(const State& s, const PsoKey& k) {
+    if (k.blend || SimpleState(s, kMAlphaTestEnable)) return true;
+    for (int i = 0; i < 4; i++) {
+        if (s.textures[i] && s.tss[size_t(i)][kTssAlphaKill] == kAlphaKillEnable) return true;
+    }
+    return false;
+}
+
 // D3DCMP_LESSEQUAL
 constexpr uint32_t kZFuncLessEqual = 0x203;
 // pulls an overlay pass toward the camera: 16 units of a 24 bit depth buffer, a quarter of the depth slope
@@ -2454,6 +2490,7 @@ void D3D12Backend::KeyDepthStencil(const State& s, const Assembled& a, PsoKey& k
         k.szfail = SimpleState(s, kMStencilZFail);
         k.spass = SimpleState(s, kMStencilPass);
     }
+    if (MarksOcclusion(k)) KeyOcclusionMark(k);
     // polygon offset: bias in depth buffer units, the target is always 24 bit; the slope is per console pixel,
     // and an upscaled target's pixels are smaller
     if (a.topology == Topology::Triangles && SimpleState(s, kMSolidOffsetEnable)) {
@@ -2943,11 +2980,13 @@ void D3D12Backend::SetViewportScissor(const State& s, uint32_t gw) {
     cl_->RSSetScissorRects(1, &rect);
 }
 
-void D3D12Backend::SetBlendFactorStencilRef(const State& s) {
+void D3D12Backend::SetBlendFactorStencilRef(const State& s, const PsoKey& k) {
     float bf[4];
     Color(SimpleState(s, kMBlendColor), bf);
     cl_->OMSetBlendFactor(bf);
-    cl_->OMSetStencilRef(SimpleState(s, kMStencilRef) & 0xFF);
+    uint32_t ref = SimpleState(s, kMStencilRef) & 0xFF;
+    if (k.ao_mark) ref = Translucent(s, k) ? kAoStencilBit : 0;
+    cl_->OMSetStencilRef(ref);
 }
 
 D3D_PRIMITIVE_TOPOLOGY PrimitiveTopology(const Assembled& a) {
@@ -3056,7 +3095,7 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     // texture views and samplers, viewport and scissor, blend factor and stencil reference
     SetTextureViewsAndSamplers(s, a, stages);
     SetViewportScissor(s, size.w);
-    SetBlendFactorStencilRef(s);
+    SetBlendFactorStencilRef(s, k);
 
     // geometry
     DrawGeometry(a);
@@ -3148,6 +3187,7 @@ void D3D12Backend::Occlusion(const State& s, const float p[4 * kOcclusionRects])
     D3D12_RECT rect = ViewRect(v, *rt);
     if (rect.right <= rect.left || rect.bottom <= rect.top || v.max_z <= v.min_z) return;
     if (!EnsureOcclusionTargets(rt->w, rt->h)) return;
+    ao_frame_ = presents_ + 1;
     if (cap_) {
         CapStep(s.rt);
         fprintf(cap_, "%04u occlusion rt %08X ds %08X\n", cap_i_++, s.rt.data, s.zs.data);
@@ -3223,23 +3263,25 @@ ID3D12PipelineState* D3D12Backend::EnsureOcclusionPipeline(const AoPass& a) {
     ID3DBlob* ps = Compile(text, a.entry, "ps_5_0", h);
     if (!vs || !ps) return nullptr;
     D3D12_GRAPHICS_PIPELINE_STATE_DESC d = FullScreenPipelineDesc(vs, ps, a.out);
-    if (a.multiply) MultiplyBlend(d.BlendState.RenderTarget[0]);
+    if (a.multiply) OcclusionBlend(d.BlendState.RenderTarget[0]);
     d.SampleDesc.Count = a.samples;
     if (FAILED(dev_->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&pso)))) return nullptr;
     return pso.Get();
 }
 
-// t0 the scene's depth, t1 the pass before, t2 and t3 unused
+// t0 the scene's depth, t1 the pass before, t2 the scene's stencil, t3 unused
 void D3D12Backend::CreateOcclusionViews(uint32_t slot, const AoPass& a) {
-    ID3D12Resource* res[4] = {a.depth, a.src, nullptr, nullptr};
-    const DXGI_FORMAT fmt[4] = {DXGI_FORMAT_R24_UNORM_X8_TYPELESS, kAoFormat, kBgra, kBgra};
+    ID3D12Resource* res[4] = {a.depth, a.src, a.depth, nullptr};
+    const DXGI_FORMAT fmt[4] = {DXGI_FORMAT_R24_UNORM_X8_TYPELESS, kAoFormat, DXGI_FORMAT_X24_TYPELESS_G8_UINT,
+                                kBgra};
     for (int i = 0; i < 4; i++) {
-        bool ms = i == 0 && res[i] && a.ms_depth;
+        bool ms = res[i] && res[i] == a.depth && a.ms_depth;
         D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
         sv.Format = res[i] ? fmt[i] : kBgra;
         sv.ViewDimension = ms ? D3D12_SRV_DIMENSION_TEXTURE2DMS : D3D12_SRV_DIMENSION_TEXTURE2D;
         sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         if (!ms) sv.Texture2D.MipLevels = 1;
+        if (!ms && res[i] && i == 2) sv.Texture2D.PlaneSlice = 1;  // the stencil plane
         dev_->CreateShaderResourceView(res[i], &sv, Cpu(srv_heap_.Get(), slot + i, srv_inc_));
     }
 }

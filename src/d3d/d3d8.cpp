@@ -250,9 +250,29 @@ std::recursive_mutex& Lock() { return g_lock; }
 
 constexpr int kProjection = 3;  // D3DTS_PROJECTION, the renderer keeps Direct3D 8's numbers
 
-// The game fogs the world with fixed function linear table fog on clip z; the state the scene was drawn with tells
-// ambient occlusion how thick it is
+// The game fogs the world with linear table fog: its vertex programs write the view depth (clip w) to oFog, fixed
+// function draws fog on clip z. The frame's last fogged draw tells ambient occlusion how thick the fog is
 constexpr uint32_t kFogLinear = 3;
+
+struct Fog {
+    float start = 0;
+    float end = 0;
+    uint32_t colour = 0;  // ARGB
+    bool program = false;
+};
+Fog g_fog;
+
+float StateFloat(uint32_t rs) {
+    float f;
+    std::memcpy(&f, &g_state.rs[rs], 4);
+    return f;
+}
+
+void LatchFog() {
+    if (!g_state.rs[gpu::kRsFogEnable] || g_state.rs[gpu::kRsFogTableMode] != kFogLinear) return;
+    bool program = (g_state.vs_handle & 1) != 0;
+    g_fog = {StateFloat(gpu::kRsFogStart), StateFloat(gpu::kRsFogEnd), g_state.rs[gpu::kRsFogColor], program};
+}
 
 // fog amount at view depth z: min(saturate(slope * z + offset), most)
 struct FogFade {
@@ -261,23 +281,20 @@ struct FogFade {
     float most = 0;
 };
 
-float StateFloat(uint32_t rs) {
-    float f;
-    std::memcpy(&f, &g_state.rs[rs], 4);
-    return f;
-}
-
 // m: the camera to screen matrix, clip z = m[10] * view z + m[14]
 FogFade FogOverDepth(const float* m) {
-    if (!g_state.rs[gpu::kRsFogEnable] || g_state.rs[gpu::kRsFogTableMode] != kFogLinear) return {};
-    float start = StateFloat(gpu::kRsFogStart);
-    float range = StateFloat(gpu::kRsFogEnd) - start;
+    float range = g_fog.end - g_fog.start;
     if (range <= 0) return {};
-    return {m[10] / range, (m[14] - start) / range, 1};
+    if (g_fog.program) return {1 / range, -g_fog.start / range, 1};
+    return {m[10] / range, (m[14] - g_fog.start) / range, 1};
 }
 
+// one channel of an ARGB colour, 0 to 1
+float Channel(uint32_t argb, uint32_t shift) { return float((argb >> shift) & 0xFF) / 255.0f; }
+
 // sent as p: 1 / the projection's x and y scale, its x and y centre, then view z = p[4] / (ndc depth - p[5]),
-// then p[6]: 1 for GTAO, 0 for SSAO, then the fog already drawn: min(saturate(p[8] * view z + p[9]), p[10])
+// then p[6]: 1 for GTAO, 0 for SSAO, then the fog already drawn: min(saturate(p[8] * view z + p[9]), p[10]),
+// then its colour p[12] to p[14]
 void Occlusion(bool gtao) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     const float* m = g_state.transforms[kProjection].data();
@@ -285,8 +302,10 @@ void Occlusion(bool gtao) {
     if (!g_backend || !perspective || !m[0] || !m[5]) return;
     float mode = gtao ? 1.0f : 0.0f;
     FogFade fog = FogOverDepth(m);
+    uint32_t colour = g_fog.colour;
     const float p[4 * gpu::kOcclusionRects] = {1 / m[0], 1 / m[5], m[8], m[9], m[14], m[10], mode, 0,
-                                               fog.slope, fog.offset, fog.most, 0};
+                                               fog.slope, fog.offset, fog.most, 0,
+                                               Channel(colour, 16), Channel(colour, 8), Channel(colour, 0), 0};
     const uint8_t* rects = reinterpret_cast<const uint8_t*>(p);
     g_backend->Clear(g_state, gpu::kOcclusionRects, rects, gpu::kClearOcclusion, 0, 0, 0);
 }
@@ -580,6 +599,7 @@ HLE_STDCALL(D3DDevice_Swap, 1) {
         if (g_backend_presents) gpu::WaitGpuFrame(g_backend_presents - 1);
         g_backend_presents++;
     }
+    g_fog = {};
     app::PaceFrame();
     // like the XDK, the surfaces stay put and their memory rotates: titles keep back buffer pointers and copy its data
     uint32_t last = g_buffers[g_buffer_count - 1], data = R32(last + 4), lk = R32(last + 8);
@@ -1128,6 +1148,7 @@ HLE_STDCALL(D3DDevice_DrawVertices, 3) {
     // constants the title pushed before the draw
     Walk(Dev(kDevPush));
     SyncDeferred();
+    LatchFog();
     if (g_backend) g_backend->Draw(g_state, a[0], a[1], a[2], nullptr);
     return 0;
 }
@@ -1136,6 +1157,7 @@ HLE_STDCALL(D3DDevice_DrawIndexedVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     Walk(Dev(kDevPush));
     SyncDeferred();
+    LatchFog();
     const uint8_t* indices = a[2] ? static_cast<const uint8_t*>(HostPtr(a[2])) : nullptr;
     if (g_backend) g_backend->Draw(g_state, a[0], 0, a[1], indices);
     return 0;
@@ -1172,6 +1194,7 @@ uint32_t UpVertices(const void* src, uint32_t bytes) {
 void DrawUp(uint32_t prim, uint32_t count, const void* vertices, uint32_t stride) {
     if (!g_backend || !count || !stride) return;
     SyncDeferred();
+    LatchFog();
     auto stream = g_state.streams[0];
     g_state.streams[0] = {UpVertices(vertices, count * stride), stride};
     g_backend->Draw(g_state, prim, 0, count, nullptr);

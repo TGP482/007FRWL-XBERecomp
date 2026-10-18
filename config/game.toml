@@ -415,3 +415,19 @@ call = "ChaseFieldOfView"
 at = 0x358423
 call = "HudWidgetShown"
 on_false = 0x358426
+
+# film update: no wait for each film frame, the shown frame is held until the next is due
+[[hook]]
+at = 0x362CC5
+call = "FilmHoldFrame"
+on_true = 0x362CD2
+
+[[hook]]
+at = 0x362D05
+call = "FilmHeld"
+on_true = 0x362E91
+
+[[hook]]
+at = 0x362D5F
+call = "FilmSkipWait"
+on_true = 0x362D89
