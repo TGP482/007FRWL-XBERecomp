@@ -111,8 +111,11 @@ struct Perf {
 Perf g_perf;
 struct PerfScope {
     double& acc;
-    PerfClock::time_point t = PerfClock::now();
-    ~PerfScope() { acc += PerfMs(t); }
+    bool on = diag::Perf();
+    PerfClock::time_point t = on ? PerfClock::now() : PerfClock::time_point{};
+    ~PerfScope() {
+        if (on) acc += PerfMs(t);
+    }
 };
 
 // F3 captures only with diag::CaptureDir set
@@ -2421,11 +2424,12 @@ void D3D12Backend::EnsureVertexShader(const State& s, const Assembled& a, DrawSh
 }
 
 bool D3D12Backend::BindStageTexturesAndTargets(const State& s, DrawTextures& stages) {
-    auto perf_t = PerfClock::now();
     draw_rt_ = bound_rt_;
     draw_ds_ = bound_ds_;
-    for (int i = 0; i < 4; i++) stages.res[i] = BindTexture(s, i, stages);
-    g_perf.bind += PerfMs(perf_t);
+    {
+        PerfScope perf_bind{g_perf.bind};
+        for (int i = 0; i < 4; i++) stages.res[i] = BindTexture(s, i, stages);
+    }
     // textures may have recorded copies that unbound the targets or moved them out of their target states
     if (bound_rt_ != draw_rt_ || bound_ds_ != draw_ds_) return BindTargets(s);
     if (bound_rt_) Transition(bound_rt_->res.Get(), bound_rt_->state, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -3090,9 +3094,11 @@ struct DrawEnd {
 // Assemble, timed and counted
 bool D3D12Backend::AssembleDraw(const State& s, uint32_t prim, uint32_t start, uint32_t count,
                                 const uint8_t* indices, Assembled& a) {
-    auto perf_t = PerfClock::now();
-    bool assembled = Assemble(s, prim, start, count, indices, a);
-    g_perf.assemble += PerfMs(perf_t);
+    bool assembled;
+    {
+        PerfScope perf_assemble{g_perf.assemble};
+        assembled = Assemble(s, prim, start, count, indices, a);
+    }
     g_perf.verts += a.vertex_count;
     g_perf.raw += a.vertices.empty();
     return assembled;
