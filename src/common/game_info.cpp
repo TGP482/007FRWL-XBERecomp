@@ -148,6 +148,7 @@ const app::GameInfo app::kGame = {
         {"hdr_output", &game::Opt().hdr_output, nullptr},
         {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},
         {"audio_output", nullptr, &game::Opt().audio_output},
+        {"msaa", nullptr, &game::Opt().msaa},
     },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it

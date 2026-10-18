@@ -15,6 +15,7 @@ struct Options {
     uint32_t ambient_occlusion = 0;  // screen space, from the scene's depth: 0 off, 1 SSAO, 2 GTAO
     uint32_t audio_output = 0;  // audio::kOutputAuto, kOutputStereo, kOutputSurround or kOutputMono
     float mouse_sensitivity = 1.0f;
+    uint32_t msaa = 0;  // samples a pixel of the scene, 0 off
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };
 Options& Opt();

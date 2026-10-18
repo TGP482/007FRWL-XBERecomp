@@ -87,6 +87,8 @@ constexpr std::pair<ImGuiCol, ImVec4> kPanelColors[] = {
 
 constexpr uint32_t kAnisoValues[] = {0, 2, 4, 8, 16};
 const char* const kAnisoNames[] = {"GAME DEFAULT", "2x", "4x", "8x", "16x"};
+constexpr uint32_t kMsaaValues[] = {0, 2, 4, 8};
+const char* const kMsaaNames[] = {"OFF", "2x", "4x", "8x"};
 constexpr uint32_t kAoValues[] = {0, 1, 2};
 const char* const kAoNames[] = {"OFF", "SSAO", "GTAO"};
 constexpr uint32_t kAudioOutputs[] = {audio::kOutputAuto, audio::kOutputMono, audio::kOutputStereo,
@@ -255,6 +257,8 @@ std::string StepFpsCounter(Settings&, int step) {
 
 std::string StepAniso(Settings& s, int step) { return kAnisoNames[StepTable(kAnisoValues, s.aniso, step)]; }
 
+std::string StepMsaa(Settings&, int step) { return kMsaaNames[StepTable(kMsaaValues, game::Opt().msaa, step)]; }
+
 std::string StepAmbientOcclusion(Settings&, int step) {
     return kAoNames[StepTable(kAoValues, game::Opt().ambient_occlusion, step)];
 }
@@ -319,6 +323,7 @@ enum RowId {
     kAmbientOcclusionRow,
     kAudioOutputRow,
     kHdrOutputRow,
+    kMsaaRow,
 };
 
 // in RowId order
@@ -337,6 +342,7 @@ constexpr StepFn kSteps[] = {
     StepAmbientOcclusion,
     StepAudioOutput,
     StepHdrOutput,
+    StepMsaa,
 };
 
 bool Held(int id) { return id == kDisplayModeRow || id == kResolutionRow; }
@@ -357,6 +363,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kMaxFpsRow, "MAX FRAME RATE"},
     {Kind::Value, kFpsCounterRow, "FPS COUNTER"},
     {Kind::Heading, -1, "GRAPHICS"},
+    {Kind::Value, kMsaaRow, "MSAA"},
     {Kind::Value, kAnisoRow, "ANISOTROPIC FILTERING"},
     {Kind::Value, kAmbientOcclusionRow, "AMBIENT OCCLUSION"},
     {Kind::Heading, -1, "GENERAL"},
@@ -613,6 +620,7 @@ void RestoreDefaults(int page) {
         game::Opt().fps_counter = defaults.fps_counter;
         game::Opt().hdr_output = defaults.hdr_output;
         game::Opt().audio_output = defaults.audio_output;
+        game::Opt().msaa = defaults.msaa;
         audio::SetOutputMode(defaults.audio_output);
         RestoreSettingsDefaults();
     } else {
