@@ -758,6 +758,14 @@ struct DrawTextures {
     float atlas[4] = {};        // kTexAtlasClamp: stage 0's sample bounds, u and v low then high
 };
 
+// the last draw's texture views and their slots, reused by a draw with the same views in the same frame
+struct ViewTable {
+    ID3D12Resource* res[4] = {};
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv[4] = {};
+    uint32_t slot = 0;
+    uint64_t frame = UINT64_MAX;
+};
+
 // a draw's shaders: what they are made from, their cache keys, the hashes Compile returned and the compiled blobs
 struct DrawShaders {
     bool prog = false;  // a vertex program, else the fixed function pipeline
@@ -910,6 +918,7 @@ private:
     void CaptureShaders(const State& s, const Assembled& a, const DrawShaders& sh, const PixelKey& pk);
     void CaptureShader(const char* kind, uint64_t key, const std::string& src);
     void SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages);
+    bool SameViews(const DrawTextures& stages) const;
     uint32_t EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp);
     void SetViewportScissor(const State& s, uint32_t gw);
     void SetBlendFactorStencilRef(const State& s, const PsoKey& k);
@@ -1068,6 +1077,7 @@ private:
     uint64_t fence_value_ = 0;
     Frame frames_[kFrames];
     uint64_t frame_ = 0;
+    ViewTable last_views_;
     ComPtr<ID3D12GraphicsCommandList> cl_;
     ComPtr<ID3D12DescriptorHeap> srv_heap_;
     ComPtr<ID3D12DescriptorHeap> smp_heap_;
@@ -1353,6 +1363,7 @@ void D3D12Backend::Submit(bool wait) {
         f.garbage.clear();
         f.used = 0;
         f.srv = 0;
+        last_views_.frame = UINT64_MAX;
         cl_->Reset(f.alloc.Get(), nullptr);
         Begin();
     }
@@ -1407,6 +1418,7 @@ uint32_t D3D12Backend::AllocSrvSlots(uint32_t n) {
     if (f.srv + n > per) {
         LOG_FIRST(4, "d3d12: descriptor ring wrapped within a frame");
         f.srv = 0;
+        last_views_.frame = UINT64_MAX;
     }
     uint32_t i = uint32_t(frame_ % kFrames) * per + f.srv;
     f.srv += n;
@@ -2975,17 +2987,29 @@ void D3D12Backend::ApplyAtlasClamp(const State& s, const Assembled& a, DrawTextu
 }
 
 // a stage without a texture gets a null view of its kind; the samplers read the views after
+bool D3D12Backend::SameViews(const DrawTextures& stages) const {
+    if (last_views_.frame != frame_) return false;
+    if (std::memcmp(last_views_.res, stages.res, sizeof(stages.res))) return false;
+    return !std::memcmp(last_views_.sv, stages.sv, sizeof(stages.sv));
+}
+
 void D3D12Backend::SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages) {
-    uint32_t slot = AllocSrvSlots(4);
     for (int i = 0; i < 4; i++) {
-        D3D12_SHADER_RESOURCE_VIEW_DESC& sv = stages.sv[i];
-        if (!stages.res[i]) {
-            sv.ViewDimension = NullViewDimension(stages.info[i].kind);
-            sv.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        }
-        dev_->CreateShaderResourceView(stages.res[i], &sv, Cpu(srv_heap_.Get(), slot + i, srv_inc_));
+        if (stages.res[i]) continue;
+        stages.sv[i].ViewDimension = NullViewDimension(stages.info[i].kind);
+        stages.sv[i].Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     }
-    cl_->SetGraphicsRootDescriptorTable(2, Gpu(srv_heap_.Get(), slot, srv_inc_));
+    if (!SameViews(stages)) {
+        uint32_t slot = AllocSrvSlots(4);
+        for (int i = 0; i < 4; i++) {
+            dev_->CreateShaderResourceView(stages.res[i], &stages.sv[i], Cpu(srv_heap_.Get(), slot + i, srv_inc_));
+        }
+        std::memcpy(last_views_.res, stages.res, sizeof(stages.res));
+        std::memcpy(last_views_.sv, stages.sv, sizeof(stages.sv));
+        last_views_.slot = slot;
+        last_views_.frame = frame_;
+    }
+    cl_->SetGraphicsRootDescriptorTable(2, Gpu(srv_heap_.Get(), last_views_.slot, srv_inc_));
     uint32_t samplers = EnsureStageSamplers(s, stages, AnyStageWraps(s) && UnitTexcoords(a));
     cl_->SetGraphicsRootDescriptorTable(3, Gpu(smp_heap_.Get(), samplers, smp_inc_));
 }
