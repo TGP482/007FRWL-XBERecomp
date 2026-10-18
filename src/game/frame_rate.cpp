@@ -48,6 +48,20 @@ struct Clock {
 Clock g_clock;
 MsCounter g_flash_ms;
 
+// speedboat sway, the boat at ebx: each frame the waves kick its roll and pitch by a fixed amount while the pull back
+// scales with the frame time, so the sway grew with the frame rate
+constexpr uint32_t kBoatRoll = 0xDC;
+constexpr uint32_t kBoatPitch = 0xE4;
+constexpr double kConsoleFrameSeconds = 1.0 / 59.94;
+
+struct BoatSway {
+    float roll = 0.0f;
+    float pitch = 0.0f;
+};
+BoatSway g_boat;
+
+float FrameShare() { return float(kernel::G<float>(kGameSeconds) / kConsoleFrameSeconds); }
+
 // focus pauses are no time
 double NowMs() {
     using namespace std::chrono;
@@ -110,4 +124,20 @@ X86_FUNC(sub_00335960) {
 void FlashTickMs(X86Context& ctx, uint8_t*) {
     double ms = double(kernel::G<float>(kUnscaledSeconds)) / kSecondsPerMs;
     ctx.eax = g_flash_ms.Advance(ms);
+}
+
+// before the waves' roll kick, 0x20C372
+void BoatRollKick(X86Context& ctx, uint8_t*) { g_boat.roll = kernel::G<float>(ctx.ebx + kBoatRoll); }
+
+// after the roll kick and before the pitch kick, 0x20C396: the roll kick as a share of a console frame
+void BoatPitchKick(X86Context& ctx, uint8_t*) {
+    float& roll = kernel::G<float>(ctx.ebx + kBoatRoll);
+    roll = g_boat.roll + (roll - g_boat.roll) * FrameShare();
+    g_boat.pitch = kernel::G<float>(ctx.ebx + kBoatPitch);
+}
+
+// after the pitch kick, 0x20C3B7
+void BoatKicked(X86Context& ctx, uint8_t*) {
+    float& pitch = kernel::G<float>(ctx.ebx + kBoatPitch);
+    pitch = g_boat.pitch + (pitch - g_boat.pitch) * FrameShare();
 }

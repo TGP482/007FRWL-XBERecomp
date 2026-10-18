@@ -387,6 +387,19 @@ call = "MenuDrawBegin"
 at = 0x412F24
 call = "MenuDrawEnd"
 
+# speedboat sway: the waves' roll and pitch kicks are a share of a console frame
+[[hook]]
+at = 0x20C372
+call = "BoatRollKick"
+
+[[hook]]
+at = 0x20C396
+call = "BoatPitchKick"
+
+[[hook]]
+at = 0x20C3B7
+call = "BoatKicked"
+
 # Flash menus' tick, the frame time in whole milliseconds: the fraction is carried
 [[hook]]
 at = 0x411183
