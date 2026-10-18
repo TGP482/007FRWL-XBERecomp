@@ -1,6 +1,8 @@
 // The mouse in the game's Flash menus. A menu page is a screen that keeps a grid of items and takes the pad's input
 // codes; its script names the item clips. The cursor focuses the item under it through the screen's own
 // SetCurrentIndex, the left button presses the page's accept on the pad and the right button its cancel.
+// The focus changes in the pad's turn: the movie's ActionScript calls the native Tick, which dispatches the queued
+// pad input. A script's goto run outside it loses its frame's stop(), leaving items lit.
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -143,6 +145,13 @@ struct Edges {
     bool back;
 };
 
+// the focus the cursor asks for, applied in the pad's turn
+struct Pending {
+    uint32_t screen = 0;
+    std::optional<uint32_t> index;
+    bool accept = false;
+};
+
 struct CursorState {
     uint32_t screen = 0;
     Point seen{};
@@ -151,6 +160,7 @@ struct CursorState {
     uint32_t script = 0;
     Order order = Order::Unknown;  // of the script's items, once their labels showed it
     uint64_t menu_ms = 0;
+    Pending pending;
 };
 CursorState g_state;
 
@@ -508,10 +518,16 @@ input::PageKeys KeysOf(uint32_t screen) {
     return {accept, TapFor(R32(screen + kScreenCancel), input::Tap::B)};
 }
 
-void Focus(X86Context& ctx, uint32_t screen, uint32_t index) {
-    if (index == R32(screen + kScreenFocus)) return;
-    ctx.ecx = screen;
-    CallGuest(ctx, kSetCurrentIndex, {index});
+// one jump to the item, then the click's accept, which the pad reads after it
+void ApplyPending(X86Context& ctx) {
+    Pending pending = g_state.pending;
+    g_state.pending = {};
+    if (!pending.index || pending.screen != MenuScreen()) return;
+    if (*pending.index != R32(pending.screen + kScreenFocus)) {
+        ctx.ecx = pending.screen;
+        CallGuest(ctx, kSetCurrentIndex, {*pending.index});
+    }
+    if (pending.accept) input::Press(KeysOf(pending.screen).accept);
 }
 
 void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
@@ -537,8 +553,9 @@ void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
     }
     uint32_t slot = order == Order::Reverse ? last - *hit : *hit;
     uint32_t index = options ? uint32_t(OptionsMenuIndexAt(int(slot))) : slot;
-    Focus(ctx, screen, index);
-    if (edges.click) input::Press(accept);
+    Pending& pending = g_state.pending;
+    bool clicked = pending.accept && pending.screen == screen && pending.index == index;
+    pending = {screen, index, edges.click || clicked};
 }
 
 // a new page starts from where the cursor rests: only a move or a click after that acts
@@ -578,5 +595,12 @@ void UpdateCursor(X86Context& ctx) {
 void MenuCursor(X86Context& ctx, uint8_t*) {
     X86Context saved = ctx;
     UpdateCursor(ctx);
+    ctx = saved;
+}
+
+// the input manager's turn inside the movie's Tick, before the queued pad input is dispatched
+void MenuCursorFocus(X86Context& ctx, uint8_t*) {
+    X86Context saved = ctx;
+    ApplyPending(ctx);
     ctx = saved;
 }

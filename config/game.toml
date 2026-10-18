@@ -392,6 +392,11 @@ call = "MenuDrawEnd"
 at = 0x224BE2
 call = "MenuCursor"
 
+# the input manager's turn inside the movie's Tick: the cursor's focus change runs where the pad's does
+[[hook]]
+at = 0x411152
+call = "MenuCursorFocus"
+
 # frame tick, after the pads are read: the menus' button legends show the keys on keyboard and mouse
 [[hook]]
 at = 0x224BE2
