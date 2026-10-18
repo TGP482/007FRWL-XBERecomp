@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -65,14 +66,33 @@ constexpr uint32_t kClipBox = 0x2FF5A3;  // thiscall(float[4] out): min x, min y
 constexpr uint32_t kItemLabelText = 0x04;
 constexpr uint32_t kItemFrameLabel = 2;
 
-// item clips by the names the pages' scripts give them, the index between the two parts
+// the world dossier's mission row: item i is the dot of mission kMissionDots[i]
+constexpr uint32_t kMissionDots[] = {0, 1, 2, 3, 14, 4, 15, 5, 6, 7, 8, 9, 10, 16, 11, 12, 13, 17};
+
+// item clips by the names the pages' scripts give them, the number between the two parts. A focused dossier tab
+// is swapped for its "on" clip. Numbers from a table or a first other than 0 come in the page's own order
 struct ItemName {
     const char* prefix;
     const char* suffix;
+    const char* focused = nullptr;
+    uint32_t first = 0;
+    std::span<const uint32_t> numbers = {};
 };
-constexpr ItemName kItemNames[] = {
-    {"object", ""}, {"textitem", ""}, {"textmsg", "_mc"}, {"item", ""}, {"upgradeBox_mc", ""},
+const ItemName kItemNames[] = {
+    {"object", ""},
+    {"textitem", ""},
+    {"textmsg", "_mc"},
+    {"item", ""},
+    {"upgradeBox_mc", ""},
+    {"tab", "", "on", 1},
+    {"leveldot", "", nullptr, 0, kMissionDots},
+    {"levelHolder", ""},
 };
+
+// The pause menu's tabs have no names: the page keeps one at each depth, blue or red as it is focused.
+// Its page is told apart by the clips beside them
+constexpr int kPauseTabDepths[] = {124, 85, 46, 7};
+constexpr const char* kPauseMarks[] = {"options_mc", "upgrades_mc", "border_mc"};
 // the frame labels a page's script puts its focused item on
 constexpr const char* kFocusLabels[] = {"active", "default"};
 
@@ -235,17 +255,46 @@ bool ShowsFocus(uint32_t clip) {
 
 // items
 
-std::optional<std::vector<uint32_t>> NamedItems(const std::vector<uint32_t>& children, uint32_t count) {
+uint32_t NumberOf(const ItemName& name, uint32_t i) {
+    if (name.numbers.empty()) return name.first + i;
+    return i < name.numbers.size() ? name.numbers[i] : UINT_MAX;
+}
+
+uint32_t NamedItem(const std::vector<uint32_t>& children, const ItemName& name, uint32_t i) {
+    std::string stem = name.prefix + std::to_string(NumberOf(name, i));
+    uint32_t clip = Named(children, (stem + name.suffix).c_str());
+    if (!clip && name.focused) clip = Named(children, (stem + name.focused).c_str());
+    return clip;
+}
+
+std::optional<Items> NamedItems(const std::vector<uint32_t>& children, uint32_t count, bool own) {
     for (const ItemName& name : kItemNames) {
         std::vector<uint32_t> clips;
         for (uint32_t i = 0; i < count; i++) {
-            uint32_t clip = Named(children, (name.prefix + std::to_string(i) + name.suffix).c_str());
+            uint32_t clip = NamedItem(children, name, i);
             if (!clip) break;
             clips.push_back(clip);
         }
-        if (clips.size() == count) return clips;
+        bool ordered = own || name.first || !name.numbers.empty();
+        if (clips.size() == count) return Items{clips, ordered};
     }
     return std::nullopt;
+}
+
+bool IsPausePage(const std::vector<uint32_t>& children) {
+    return std::all_of(std::begin(kPauseMarks), std::end(kPauseMarks),
+                       [&](const char* mark) { return Named(children, mark) != 0; });
+}
+
+std::optional<Items> PauseTabs(const std::vector<uint32_t>& children, uint32_t count) {
+    if (count != std::size(kPauseTabDepths) || !IsPausePage(children)) return std::nullopt;
+    std::vector<uint32_t> clips;
+    for (int depth : kPauseTabDepths) {
+        auto at = std::find_if(children.begin(), children.end(), [depth](uint32_t c) { return Depth(c) == depth; });
+        if (at == children.end()) return std::nullopt;
+        clips.push_back(*at);
+    }
+    return Items{clips, true};
 }
 
 // the item clips a page has
@@ -262,11 +311,12 @@ std::optional<Items> FindItems(uint32_t screen) {
     uint32_t path = script ? R32(script + kScriptPath) : 0;
     if (count == 0 || count > kMaxItems || !Readable(path)) return std::nullopt;
     std::vector<uint32_t> parents{Resolve(Text(path))};
+    if (auto tabs = PauseTabs(Children(parents.front()), count)) return tabs;
     for (int depth = 0; depth < kSearchDepth && parents.front(); depth++) {
         std::vector<uint32_t> next;
         for (uint32_t parent : parents) {
             std::vector<uint32_t> children = Children(parent);
-            if (auto clips = NamedItems(children, count)) return Items{*clips, depth == 0};
+            if (auto items = NamedItems(children, count, depth == 0)) return items;
             next.insert(next.end(), children.begin(), children.end());
         }
         if (next.empty() || next.size() > kMaxSearch) break;
