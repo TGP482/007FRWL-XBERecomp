@@ -4,7 +4,9 @@
 // and a button the font draws as a picture ("Press[RDDown]to continue") is named by its key. The console's wording
 // reads in PC terms: the Xbox's names always, START and the controller with the keyboard or mouse used last.
 #include <algorithm>
+#include <bit>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <optional>
@@ -21,13 +23,25 @@ using namespace flash;
 
 namespace {
 
-// text line draw, thiscall(font, rect, scale, text, align, flags)
+// text line draw, thiscall(font, rect, scale, text, align, flags); rect is x, y, width, height
 constexpr uint32_t kDrawTextArg = 0x10;  // the text, from esp at the entry
+constexpr uint32_t kDrawRectArg = 0x08;
+constexpr uint32_t kDrawScaleArg = 0x0C;
+constexpr uint32_t kDrawAlignArg = 0x14;  // 0 left, 1 centre, 2 right
+constexpr uint32_t kRectX = 0x00;
+constexpr uint32_t kRectWidth = 0x08;
 constexpr uint32_t kMaxText = 0x400;
+
+// text measure, thiscall(wrap width, wrap height, scale, text, float* width, float* height), the same text args
+constexpr uint32_t kMeasureText = 0x356F90;
+constexpr float kNoWrap = 1.0e6f;
 
 // clip box, thiscall(float[4] out): min x, min y, max x, max y in its parent
 constexpr uint32_t kClipBox = 0x2FF5A3;
 constexpr uint32_t kMatrixTx = kClipMatrix + 0x10;
+constexpr uint32_t kMatrixTy = kClipMatrix + 0x14;
+
+constexpr float kLegendGap = 10.0f;  // stage units between one relabelled legend and the next
 
 // frame item: a placement is {type, flags, depth, character id}
 constexpr uint32_t kItemPlace = 3;
@@ -106,14 +120,31 @@ struct LegendText {
     Buttons buttons;
 };
 
+// a legend clip on screen and its text clip
+struct LegendClip {
+    uint32_t clip;
+    uint32_t text;
+    std::string label;
+};
+
 // game thread: the legends on screen this tick, and whether their pictures are hidden
 struct LegendState {
     std::vector<LegendText> texts;
+    std::vector<LegendClip> clips;
     bool hidden = false;
     size_t visits = 0;
 };
 LegendState g_legends;
 std::map<uint32_t, float> g_moved;  // legend texts moved into their hidden picture's room, by their place before
+
+// a legend moved along its row: where the movie put it and where it was last put
+struct Placed {
+    float base;
+    float written;
+};
+std::map<uint32_t, Placed> g_placed;
+std::map<std::string, float> g_label_share;  // a legend text's drawn width over its field's, by its own text
+bool g_measuring = false;
 
 std::string PauseKey() {
     std::string name = input::ButtonKey(kStart);
@@ -192,14 +223,21 @@ void SetShown(uint32_t clip, bool shown) {
     W32(clip + kClipVisible, shown ? flags | kVisibleBit : flags & ~kVisibleBit);
 }
 
-float LeftOf(X86Context& ctx, uint32_t clip) {
+struct Span {
+    float left;
+    float right;
+};
+
+Span SpanOf(X86Context& ctx, uint32_t clip) {
     static const uint32_t out = mem::AllocSystem(4 * sizeof(float));
     uint32_t ecx = ctx.ecx;
     ctx.ecx = clip;
     CallGuest(ctx, kClipBox, {out});
     ctx.ecx = ecx;
-    return G<float>(out);
+    return {G<float>(out), G<float>(out + 8)};
 }
+
+float LeftOf(X86Context& ctx, uint32_t clip) { return SpanOf(ctx, clip).left; }
 
 // a text after the picture takes the picture's room while it is hidden, so the longer label keeps clear of the next
 void UpdateTextPlace(X86Context& ctx, uint32_t text, uint32_t picture, bool keyboard) {
@@ -228,7 +266,83 @@ void ApplyLegend(X86Context& ctx, uint32_t clip, const Legend& legend, bool keyb
         uint32_t field = EditTextField(child);
         if (!field) continue;
         UpdateTextPlace(ctx, child, picture, keyboard);
+        if (g_legends.clips.empty() || g_legends.clips.back().clip != clip) {
+            g_legends.clips.push_back({clip, child, ShownText(field)});
+        }
         if (keyboard) g_legends.texts.push_back({ShownText(field), legend.buttons});
+    }
+}
+
+// the legend's x as the movie last put it; the shift is written over it
+void PlaceLegend(uint32_t clip, float shift) {
+    float& x = G<float>(clip + kMatrixTx);
+    auto placed = g_placed.find(clip);
+    if (placed == g_placed.end() || placed->second.written != x) {
+        placed = g_placed.insert_or_assign(clip, Placed{x, x}).first;
+    }
+    x = placed->second.base + shift;
+    placed->second.written = x;
+}
+
+// legends gone from the screen are forgotten; with the pad the rest go back where the movie put them
+void UpdatePlaced(bool keyboard) {
+    std::map<uint32_t, Placed> kept;
+    for (const LegendClip& legend : g_legends.clips) {
+        auto placed = g_placed.find(legend.clip);
+        if (placed == g_placed.end()) continue;
+        float& x = G<float>(legend.clip + kMatrixTx);
+        if (keyboard) kept.insert(*placed);
+        else if (x == placed->second.written) x = placed->second.base;
+    }
+    g_placed = std::move(kept);
+}
+
+struct RowItem {
+    uint32_t clip;
+    float left;  // the text's, in the row's units with the legend where the movie put it
+    float width;
+};
+
+std::optional<RowItem> RowItemOf(X86Context& ctx, const LegendClip& legend) {
+    auto share = g_label_share.find(legend.label);
+    if (share == g_label_share.end()) return std::nullopt;
+    auto placed = g_placed.find(legend.clip);
+    float x = G<float>(legend.clip + kMatrixTx);
+    float base = placed != g_placed.end() && placed->second.written == x ? placed->second.base : x;
+    Span field = SpanOf(ctx, legend.text);
+    float scale = G<float>(legend.clip + kClipMatrix);
+    return RowItem{legend.clip, base + field.left * scale, share->second * (field.right - field.left) * scale};
+}
+
+// legends of one parent are spread so each longer label ends before the next begins; the row grows on both sides
+void LayOutRow(X86Context& ctx, const std::vector<LegendClip>& row) {
+    std::vector<RowItem> items;
+    for (const LegendClip& legend : row) {
+        std::optional<RowItem> item = RowItemOf(ctx, legend);
+        if (!item) return;
+        items.push_back(*item);
+    }
+    std::sort(items.begin(), items.end(), [](const RowItem& a, const RowItem& b) { return a.left < b.left; });
+    std::vector<float> shifts(items.size(), 0.0f);
+    float right = items.front().left + items.front().width;
+    for (size_t i = 1; i < items.size(); i++) {
+        float left = std::max(items[i].left, right + kLegendGap);
+        shifts[i] = left - items[i].left;
+        right = left + items[i].width;
+    }
+    float centre = shifts.back() / 2;
+    for (size_t i = 0; i < items.size(); i++) PlaceLegend(items[i].clip, shifts[i] - centre);
+}
+
+// a row is the legends of one parent on one line
+void LayOutLegends(X86Context& ctx) {
+    std::map<std::pair<uint32_t, long>, std::vector<LegendClip>> rows;
+    for (const LegendClip& legend : g_legends.clips) {
+        long line = std::lround(G<float>(legend.clip + kMatrixTy));
+        rows[{R32(legend.clip + kClipParent), line}].push_back(legend);
+    }
+    for (const auto& [parent, row] : rows) {
+        if (row.size() > 1) LayOutRow(ctx, row);
     }
 }
 
@@ -242,9 +356,12 @@ void Visit(X86Context& ctx, uint32_t clip, int depth, bool keyboard) {
 void UpdateLegends(X86Context& ctx) {
     bool keyboard = input::KeyboardActive();
     g_legends.texts.clear();
+    g_legends.clips.clear();
     if (!keyboard && !g_legends.hidden) return;
     g_legends.visits = 0;
     for (uint32_t level : Levels()) Visit(ctx, level, 0, keyboard);
+    UpdatePlaced(keyboard);
+    if (keyboard) LayOutLegends(ctx);
     if (!keyboard) g_moved.clear();
     g_legends.hidden = keyboard;
 }
@@ -346,6 +463,32 @@ uint32_t WriteText(const std::string& text) {
     return buffer;
 }
 
+bool IsLegendText(const std::string& text) {
+    return std::any_of(g_legends.texts.begin(), g_legends.texts.end(),
+                       [&](const LegendText& legend) { return legend.text == text; });
+}
+
+// the text's width on one line, as the line draw measures it
+float LineWidth(X86Context& ctx, uint32_t text, float scale) {
+    static const uint32_t out = mem::AllocSystem(2 * sizeof(float));
+    uint32_t no_wrap = std::bit_cast<uint32_t>(kNoWrap);
+    g_measuring = true;
+    CallGuest(ctx, kMeasureText, {no_wrap, no_wrap, std::bit_cast<uint32_t>(scale), text, out, out + 4});
+    g_measuring = false;
+    return G<float>(out);
+}
+
+// A relabelled text is laid out in a box sized for the console's button picture: the box grows to keep it on one
+// line, about the side it is aligned to. Restored by the caller after the draw
+void FitRect(uint32_t rect, float width, uint32_t align) {
+    constexpr float kAlignShare[] = {0.0f, 0.5f, 1.0f};  // of the growth that goes left, by alignment
+    float& box = G<float>(rect + kRectWidth);
+    float extra = width - box;
+    if (extra <= 0 || align >= std::size(kAlignShare)) return;
+    G<float>(rect + kRectX) -= extra * kAlignShare[align];
+    box = width;
+}
+
 }  // namespace
 
 // frame tick, after the pads are read
@@ -355,11 +498,31 @@ void MenuPrompts(X86Context& ctx, uint8_t*) {
     ctx = saved;
 }
 
-// a line of text: drawn reworded
+// a line of text: drawn reworded, in a box it fits
 X86_EXTERN_FUNC(__imp__sub_00357060);
 X86_FUNC(sub_00357060) {
     uint32_t text = R32(ctx.esp + kDrawTextArg);
     std::optional<std::string> reworded = Readable(text) ? Reworded(Text(text)) : std::nullopt;
-    if (reworded) W32(ctx.esp + kDrawTextArg, WriteText(*reworded));
+    if (!reworded) return __imp__sub_00357060(ctx, base);
+    uint32_t written = WriteText(*reworded);
+    W32(ctx.esp + kDrawTextArg, written);
+    uint32_t rect = R32(ctx.esp + kDrawRectArg);
+    float width = LineWidth(ctx, written, G<float>(ctx.esp + kDrawScaleArg));
+    float box = G<float>(rect + kRectWidth);
+    std::string original(Text(text), strnlen(Text(text), kMaxText));
+    if (box > 0 && IsLegendText(original)) g_label_share[original] = width / box;
+    float x = G<float>(rect + kRectX);
+    FitRect(rect, width, R32(ctx.esp + kDrawAlignArg));
     __imp__sub_00357060(ctx, base);
+    G<float>(rect + kRectX) = x;
+    G<float>(rect + kRectWidth) = box;
+}
+
+// a text measured for its box: measured as it will be drawn
+X86_EXTERN_FUNC(__imp__sub_00356F90);
+X86_FUNC(sub_00356F90) {
+    uint32_t text = R32(ctx.esp + kDrawTextArg);
+    std::optional<std::string> reworded = !g_measuring && Readable(text) ? Reworded(Text(text)) : std::nullopt;
+    if (reworded) W32(ctx.esp + kDrawTextArg, WriteText(*reworded));
+    __imp__sub_00356F90(ctx, base);
 }
