@@ -176,6 +176,7 @@ const app::GameInfo app::kGame = {
         {"fmv_scale", nullptr, &game::Opt().fmv_scale},
         {"walk_speed", nullptr, &game::Opt().walk_speed},
         {"pause_on_focus_loss", &game::Opt().pause_on_focus_loss, nullptr},
+        {"async_shaders", &game::Opt().async_shaders, nullptr},
     },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it

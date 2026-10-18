@@ -25,6 +25,7 @@ struct Options {
     uint32_t walk_speed = 50;  // percent of a full stick the walk key moves at
     std::string monitor;  // its device name, \\.\DISPLAY2; empty the primary
     bool pause_on_focus_loss = true;  // the game and its sound stop while the window is in the background
+    bool async_shaders = true;  // a draw whose pipeline needs compiling is skipped until the build threads have it
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };
 Options& Opt();

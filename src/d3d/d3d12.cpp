@@ -13,6 +13,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -71,6 +72,8 @@ constexpr float kDefaultPaperNits = 200.0f;
 constexpr float kDefaultPeakNits = 1000.0f;
 constexpr float kMaxPeakNits = 4000.0f;  // brighter is a display without calibration reporting PQ's 10000
 constexpr float kSdrWhiteUnit = 0.08f;  // Windows' SDR white level: 1000 is 80 nits
+// longest a frame missing draws still on the build threads keeps the last whole frame on screen instead
+constexpr auto kHoldMax = std::chrono::milliseconds(50);
 
 // perf diagnostic: where a frame's time goes, logged once a second with diag::Perf
 using PerfClock = std::chrono::steady_clock;
@@ -904,8 +907,11 @@ private:
     void KeyDepthStencil(const State& s, const Assembled& a, PsoKey& k);
     bool MarksOcclusion(const PsoKey& k) const;
     void ApplyOverlayBias(const DrawShaders& sh, PsoKey& k) const;
-    ID3D12PipelineState* EnsurePipeline(const PsoKey& k);
-    ComPtr<ID3D12PipelineState> CreatePipeline(const PsoKey& k, uint64_t h, ID3DBlob* vs, ID3DBlob* ps);
+    ID3D12PipelineState* EnsurePipeline(const PsoKey& k, bool wait);
+    void TakeBuilt();
+    void DeliverBuilt(uint64_t h, ComPtr<ID3D12PipelineState> pso);
+    ComPtr<ID3D12PipelineState> CreatePipeline(const PsoKey& k, uint64_t h, ID3DBlob* vs, ID3DBlob* ps, bool compile,
+                                               bool& pending);
     ComPtr<ID3D12PipelineState> BuildPipeline(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& d, uint64_t key);
     void FillPipelineDesc(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps, D3D12_GRAPHICS_PIPELINE_STATE_DESC& d) const;
     void ExpandPoints(D3D12_GRAPHICS_PIPELINE_STATE_DESC& d);
@@ -1112,6 +1118,15 @@ private:
     std::condition_variable shader_done_;
     std::unordered_map<uint64_t, uint64_t> shader_src_;  // vertex and pixel program keys to source hash
     std::unordered_map<uint64_t, ComPtr<ID3D12PipelineState>> psos_;
+    // async shaders: a pipeline that needs a compiler is built on the build threads, its draws skipped until it is back
+    bool async_ = false;
+    bool skipped_frame_ = false;
+    bool shown_ = false;
+    std::chrono::steady_clock::time_point shown_t_;
+    std::unordered_set<uint64_t> building_;
+    std::vector<std::pair<uint64_t, ComPtr<ID3D12PipelineState>>> built_;
+    std::mutex built_lock_;
+    std::atomic<bool> built_ready_{false};
     std::unordered_map<uint64_t, uint32_t> samplers_;
     uint32_t smp_used_ = 0;
     std::unordered_map<uint64_t, Target> targets_;
@@ -1355,6 +1370,7 @@ void D3D12Backend::LoadSettings() {
     scale_ = app::RenderScale(guest_h_);
     msaa_set_ = game::Opt().msaa;
     msaa_ = Samples(msaa_set_);
+    async_ = game::Opt().async_shaders;
     ext_ = g_extension.get();
     if (ext_) {
         ext_->Settings();
@@ -2129,17 +2145,53 @@ float D3D12Backend::PointScale() const {
     return float(t->w) / float(t->gw);
 }
 
-ID3D12PipelineState* D3D12Backend::EnsurePipeline(const PsoKey& k) {
+void D3D12Backend::TakeBuilt() {
+    std::lock_guard lock(built_lock_);
+    built_ready_ = false;
+    for (auto& [h, pso] : built_) {
+        // a pipeline made meanwhile without waiting stays: command lists hold it
+        psos_.emplace(h, std::move(pso));
+        building_.erase(h);
+    }
+    built_.clear();
+}
+
+void D3D12Backend::DeliverBuilt(uint64_t h, ComPtr<ID3D12PipelineState> pso) {
+    std::lock_guard lock(built_lock_);
+    built_.emplace_back(h, std::move(pso));
+    built_ready_.store(true, std::memory_order_release);
+}
+
+ID3D12PipelineState* D3D12Backend::EnsurePipeline(const PsoKey& k, bool wait) {
+    if (built_ready_.load(std::memory_order_acquire)) TakeBuilt();
     uint64_t h = Hash(&k, sizeof(k));
     auto it = psos_.find(h);
     if (it != psos_.end()) return it->second.Get();
+    bool async = async_ && !cap_ && !wait;
+    if (async && building_.count(h)) {
+        skipped_frame_ = true;
+        return nullptr;
+    }
     PerfScope perf_compile{g_perf.compile};
     g_perf.psos++;
-    bool unused = false;
-    ID3DBlob* vs = EnsureShaderCode(k.vs, true, unused);
-    ID3DBlob* ps = EnsureShaderCode(k.ps, true, unused);
+    bool pending = false;
+    ID3DBlob* vs = EnsureShaderCode(k.vs, !async, pending);
+    ID3DBlob* ps = EnsureShaderCode(k.ps, !async, pending);
     ComPtr<ID3D12PipelineState> pso;
-    if (vs && ps) pso = CreatePipeline(k, h, vs, ps);
+    if (!pending && vs && ps) pso = CreatePipeline(k, h, vs, ps, !async, pending);
+    if (pending) {
+        building_.insert(h);
+        skipped_frame_ = true;
+        cache::Post([this, k, h] {
+            bool unused = false;
+            ID3DBlob* vs = EnsureShaderCode(k.vs, true, unused);
+            ID3DBlob* ps = EnsureShaderCode(k.ps, true, unused);
+            ComPtr<ID3D12PipelineState> pso;
+            if (vs && ps) pso = CreatePipeline(k, h, vs, ps, true, unused);
+            DeliverBuilt(h, std::move(pso));
+        });
+        return nullptr;
+    }
     return (psos_[h] = std::move(pso)).Get();
 }
 
@@ -2167,14 +2219,19 @@ ComPtr<ID3D12PipelineState> D3D12Backend::BuildPipeline(const D3D12_GRAPHICS_PIP
     return pso;
 }
 
-ComPtr<ID3D12PipelineState> D3D12Backend::CreatePipeline(const PsoKey& k, uint64_t h, ID3DBlob* vs, ID3DBlob* ps) {
+// from the library, else from the driver when compile is set (any thread)
+ComPtr<ID3D12PipelineState> D3D12Backend::CreatePipeline(const PsoKey& k, uint64_t h, ID3DBlob* vs, ID3DBlob* ps,
+                                                         bool compile, bool& pending) {
     D3D12_INPUT_ELEMENT_DESC el[16];
     uint32_t n = FillInputLayout(k, el);
     D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
     d.InputLayout = {el, n};
     FillPipelineDesc(k, vs, ps, d);
     if (k.topo == uint32_t(Topology::Points)) ExpandPoints(d);
-    return BuildPipeline(d, h);
+    if (compile) return BuildPipeline(d, h);
+    ComPtr<ID3D12PipelineState> pso = cache::LoadPipeline(PipelineName(d, h), d);
+    if (!pso) pending = true;
+    return pso;
 }
 
 TexKind TextureKind(const TextureDesc& d) {
@@ -3237,7 +3294,8 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     PsoKey k;
     BuildPipelineKey(s, a, sh.vh, sh.ph, k);
     ApplyOverlayBias(sh, k);
-    ID3D12PipelineState* pso = EnsurePipeline(k);
+    // a quad is a picture or a pass over the screen: left out it shows what lies under it, so it waits for its pipeline
+    ID3D12PipelineState* pso = EnsurePipeline(k, count <= kQuadVertices);
     if (!pso) return;
     cl_->SetPipelineState(pso);
 
@@ -4106,14 +4164,23 @@ void D3D12Backend::Present(const Surface& front) {
     if (ramp_dirty_) UploadGammaRamp();
     Transition(lut_.Get(), lut_state_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
+    // a frame missing draws still on the build threads is not shown, the last whole one stays up: otherwise a new
+    // effect's intermediate passes flash on screen
+    auto now_t = std::chrono::steady_clock::now();
+    bool hold = skipped_frame_ && shown_ && now_t - shown_t_ < kHoldMax;
+    skipped_frame_ = false;
     uint32_t bi = swap_->GetCurrentBackBufferIndex();
-    DrawFrame(t, bi);
+    if (!hold) DrawFrame(t, bi);
     Submit(false);
     present_fence_[presents_ % (kFrames + 1)].store(fence_value_);
-    bool vsync = app::Get().vsync;
-    auto perf_swap = PerfClock::now();
-    swap_->Present(vsync ? 1 : 0, !vsync && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
-    g_perf.swap += PerfMs(perf_swap);
+    if (!hold) {
+        bool vsync = app::Get().vsync;
+        auto perf_swap = PerfClock::now();
+        swap_->Present(vsync ? 1 : 0, !vsync && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
+        g_perf.swap += PerfMs(perf_swap);
+        shown_ = true;
+        shown_t_ = now_t;
+    }
 
     presents_++;
     presents_seen_.store(presents_);
@@ -4130,6 +4197,7 @@ void D3D12Backend::ApplySettings() {
     float want = app::RenderScale(guest_h_);
     bool remake = ext_ && ext_->Settings();
     uint32_t msaa = game::Opt().msaa;
+    async_ = game::Opt().async_shaders;
     if (std::fabs(want - scale_) > 1e-4f || remake || msaa != msaa_set_) {
         Flush();
         for (auto& [key, tg] : targets_) (tg.depth ? free_dsv_ : free_rtv_).push_back(tg.view);
