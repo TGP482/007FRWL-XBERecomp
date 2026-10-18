@@ -46,6 +46,7 @@ struct Clock {
     MsCounter game;
 };
 Clock g_clock;
+MsCounter g_flash_ms;
 
 // focus pauses are no time
 double NowMs() {
@@ -102,4 +103,11 @@ X86_FUNC(sub_00335960) {
         if (type == R32(kRunningPre)) AdvanceGame(ms);
     }
     Return(ctx, 0, 1);
+}
+
+// the Flash menus' tick at 0x411183, about to pass ftol(frame seconds * 1000): whole milliseconds with the fraction
+// kept, as the dropped fraction slowed menu animations and stopped them above 1000 fps
+void FlashTickMs(X86Context& ctx, uint8_t*) {
+    double ms = double(kernel::G<float>(kUnscaledSeconds)) / kSecondsPerMs;
+    ctx.eax = g_flash_ms.Advance(ms);
 }
