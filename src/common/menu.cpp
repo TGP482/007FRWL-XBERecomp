@@ -49,18 +49,19 @@ struct Capture {
 };
 Capture g_capture;
 
-constexpr ImVec4 kPanelBg{0.04f, 0.045f, 0.05f, 0.94f};
-constexpr ImVec4 kBorder{0.55f, 0.60f, 0.68f, 0.85f};
-constexpr ImVec4 kText{0.89f, 0.90f, 0.92f, 1.0f};
-constexpr ImVec4 kHighlight{0.21f, 0.26f, 0.33f, 1.0f};
-constexpr ImVec4 kHeading{0.62f, 0.69f, 0.80f, 1.0f};
-constexpr ImVec4 kDim{0.57f, 0.60f, 0.64f, 1.0f};
-constexpr ImVec4 kField{0.11f, 0.12f, 0.14f, 1.0f};
-constexpr ImVec4 kFieldHovered{0.18f, 0.20f, 0.24f, 1.0f};
-constexpr ImVec4 kButton{0.15f, 0.17f, 0.20f, 1.0f};
+// the game's own menus: grey text, the gold of a selected item and its popup's frame, black popup, steel plates
+constexpr ImVec4 kPanelBg{0.03f, 0.03f, 0.03f, 0.94f};
+constexpr ImVec4 kBorder{0.85f, 0.65f, 0.09f, 0.85f};
+constexpr ImVec4 kText{0.80f, 0.80f, 0.80f, 1.0f};
+constexpr ImVec4 kHighlight{0.25f, 0.19f, 0.03f, 1.0f};  // the selected gold at a quarter over the popup black
+constexpr ImVec4 kHeading{0.91f, 0.67f, 0.02f, 1.0f};
+constexpr ImVec4 kDim{0.58f, 0.59f, 0.58f, 1.0f};
+constexpr ImVec4 kField{0.18f, 0.18f, 0.18f, 1.0f};
+constexpr ImVec4 kFieldHovered{0.25f, 0.25f, 0.25f, 1.0f};
+constexpr ImVec4 kButton{0.19f, 0.20f, 0.22f, 1.0f};
 // lighter than the highlight, so it shows on a selected row
-constexpr ImVec4 kButtonHovered{0.30f, 0.35f, 0.43f, 1.0f};
-constexpr ImVec4 kLine{0.62f, 0.69f, 0.80f, 0.35f};
+constexpr ImVec4 kButtonHovered{0.38f, 0.29f, 0.03f, 1.0f};
+constexpr ImVec4 kLine{0.91f, 0.67f, 0.02f, 0.35f};
 
 constexpr std::pair<ImGuiCol, ImVec4> kPanelColors[] = {
     {ImGuiCol_WindowBg, kPanelBg},
