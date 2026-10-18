@@ -409,3 +409,9 @@ call = "ChaseFieldOfView"
 [[hook]]
 at = 0xB5DA6
 call = "ChaseFieldOfView"
+
+# UI widget tree walk, before each widget's Draw: the toggle HUD key hides the HUD
+[[hook]]
+at = 0x358423
+call = "HudWidgetShown"
+on_false = 0x358426

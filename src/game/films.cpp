@@ -1,10 +1,11 @@
 #define NOMINMAX
 #include <windows.h>
 
+#include "common/mouse_keyboard.h"
 #include "core/input.h"
 #include "xdk/hle.h"
 
-// Every film ends on A, Start, Enter, Space or Escape, through the same path as its natural end
+// Every film ends on A, Start, Enter, Space, Escape or the left mouse button, through the same path as its natural end
 
 namespace {
 
@@ -41,7 +42,7 @@ bool UpdateSkipPress(uint32_t film_start) {
         s_film = film_start;
         s_armed = false;
     }
-    bool down = PadSkipDown() || KeySkipDown();
+    bool down = PadSkipDown() || KeySkipDown() || input::LeftButton();
     bool skip = down && s_armed;
     s_armed = !down;
     return skip;

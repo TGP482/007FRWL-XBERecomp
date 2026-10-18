@@ -41,15 +41,18 @@ Settings g_display;
 
 const char* const kPages[] = {"RECOMP SETTINGS", "MOUSE AND KEYBOARD"};
 constexpr int kPageCount = int(std::size(kPages));
+constexpr int kInputPage = 1;
 int g_page = 0;
 
 // the key binding in progress: its keys must be let go before the next press binds
 struct Capture {
     std::atomic<int> action{-1};  // the row being rebound, -1 when idle
+    int slot = 0;  // its box: 0 the key, 1 the alternate
     bool armed = false;
     int done_frame = 0;  // frame of the last bind, the key that bound must not start another
 };
 Capture g_capture;
+int g_hovered_box = -1;  // the box under the mouse or focused with a key in it, this frame
 
 // the game's own menus: grey text, the gold of a selected item and its popup's frame, black popup, steel plates
 constexpr ImVec4 kPanelBg{0.03f, 0.03f, 0.03f, 0.94f};
@@ -107,6 +110,11 @@ constexpr int kRenderMin = 20;
 constexpr int kRenderMax = 200;
 constexpr int kRenderStep = 5;
 constexpr int kRenderSlots = (kRenderMax - kRenderMin) / kRenderStep + 1;
+
+constexpr int kWalkMin = 10;
+constexpr int kWalkMax = 100;
+constexpr int kWalkStep = 5;
+constexpr int kWalkSlots = (kWalkMax - kWalkMin) / kWalkStep + 1;
 
 constexpr DWORD kMinModeWidth = 640;
 constexpr DWORD kMinModeBits = 32;
@@ -332,6 +340,16 @@ std::string StepFieldOfView(Settings&, int step) {
     return fov == kGameFov ? text + " (DEFAULT)" : text;
 }
 
+std::string StepWalkSpeed(Settings&, int step) {
+    uint32_t& speed = game::Opt().walk_speed;
+    if (step) {
+        int percent = std::clamp(int(speed), kWalkMin, kWalkMax);
+        int slot = StepIndex((percent - kWalkMin) / kWalkStep, step, kWalkSlots);
+        speed = uint32_t(kWalkMin + kWalkStep * slot);
+    }
+    return std::to_string(speed) + "%";
+}
+
 // The rows, shared with the game's own options menu. A value row's id picks its step, held rows wait for Apply.
 using StepFn = std::string (*)(Settings& s, int step);
 
@@ -354,6 +372,7 @@ enum RowId {
     kSmaaRow,
     kFieldOfViewRow,
     kFmvScaleRow,
+    kWalkSpeedRow,
 };
 
 // in RowId order
@@ -376,6 +395,7 @@ constexpr StepFn kSteps[] = {
     StepSmaa,
     StepFieldOfView,
     StepFmvScale,
+    StepWalkSpeed,
 };
 
 bool Held(int id) { return id == kDisplayModeRow || id == kResolutionRow; }
@@ -419,6 +439,7 @@ const std::vector<Row>& InputRows() {
         };
         std::span<const input::Action> actions = input::Actions();
         for (size_t i = 0; i < actions.size(); i++) out.push_back({Kind::Bind, int(i), actions[i].label});
+        out.push_back({Kind::Value, kWalkSpeedRow, "WALK SPEED"});
         return out;
     }();
     return list;
@@ -580,16 +601,19 @@ void DrawValueRow(const Row& row) {
 
 // Key bindings.
 
+constexpr const char* kUnbound = "UNBOUND";
+
 std::string KeyText(std::string keys) {
-    if (keys.empty()) return "UNBOUND";
+    if (keys.empty()) return kUnbound;
     for (char& c : keys) c = c == ',' ? '/' : char(std::toupper(uint8_t(c)));
     return keys;
 }
 
 void CancelCapture() { g_capture.action = -1; }
 
-void StartCapture(int action) {
+void StartCapture(int action, int slot) {
     g_capture.action = action;
+    g_capture.slot = slot;
     g_capture.armed = false;
 }
 
@@ -610,28 +634,96 @@ void PollCapture() {
         return;
     }
     if (vk == 0) return;
-    if (vk != VK_ESCAPE) input::Bind(size_t(g_capture.action.load()), vk);
+    if (vk != VK_ESCAPE) input::Bind(size_t(g_capture.action.load()), vk, g_capture.slot);
     EndCapture();
 }
 
-// label left, the keys where the value sits; Enter or a click starts the capture
-bool BindRow(const char* label, const std::string& keys, bool capturing) {
+// the action's key and its alternate as their boxes show them, the alternate blank when there is none
+std::vector<std::string> KeyBoxes(size_t action) {
+    std::string keys = input::Binding(action);
+    size_t comma = keys.find(',');
+    std::string second;
+    if (comma != std::string::npos) second = keys.substr(comma + 1);
+    second = second.substr(0, second.find(','));
+    if (!second.empty()) second = KeyText(second);
+    return {KeyText(keys.substr(0, comma)), second};
+}
+
+constexpr float kKeyBoxEms = 10.0f;  // a key box's width when the row has two
+
+struct KeyBox {
+    float x;
+    float width;
+    bool capturing;
+};
+
+// what one box saw this frame
+struct BoxInput {
+    bool pressed = false;
+    bool cleared = false;  // right clicked, or Delete while focused
+    bool pointed = false;  // under the mouse or focused
+};
+
+// lit while focused, hovered or capturing
+BoxInput DrawKeyBox(const RowLayout& row, const KeyBox& box, const std::string& key) {
+    ImGui::SetCursorPos(ImVec2(box.x, row.origin.y));
+    BoxInput seen;
+    seen.pressed = ImGui::InvisibleButton("##key", ImVec2(box.width, row.height));
+    bool deleted = ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Delete, false);
+    seen.cleared = ImGui::IsItemClicked(ImGuiMouseButton_Right) || deleted;
+    seen.pointed = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+    bool lit = box.capturing || ImGui::IsItemFocused() || ImGui::IsItemHovered();
+    ImU32 fill = ImGui::GetColorU32(lit ? ImGuiCol_Header : ImGuiCol_FrameBg);
+    ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), fill);
+    const char* text = box.capturing ? "PRESS A KEY" : key.c_str();
+    float centred = (box.width - ImGui::CalcTextSize(text).x) * 0.5f;
+    ImGui::SetCursorPos(ImVec2(box.x + std::max(centred, 0.0f), row.origin.y));
+    ImGui::AlignTextToFramePadding();
+    if (box.capturing) ImGui::PushStyleColor(ImGuiCol_Text, kHeading);
+    ImGui::TextUnformatted(text);
+    if (box.capturing) ImGui::PopStyleColor();
+    return seen;
+}
+
+// what a bind row's boxes saw this frame, each a box or -1
+struct BindInput {
+    int pressed = -1;
+    int cleared = -1;
+    int pointed = -1;  // only a box with a key in it
+};
+
+// label left, a box per key (the key and its alternate side by side) ending where the other rows' values do;
+// Enter or a click on a box starts its capture, a right click or Delete clears it
+BindInput BindRow(const char* label, const std::vector<std::string>& keys, int capturing) {
     RowLayout row = MeasureRow();
     ImGui::PushID(label);
-    bool pressed = DrawNavStop(row, capturing);
     DrawLabel(row, label);
-    if (capturing) ImGui::PushStyleColor(ImGuiCol_Text, kHeading);
-    DrawValueText(row, capturing ? "PRESS A KEY" : keys.c_str());
-    if (capturing) ImGui::PopStyleColor();
+    int count = int(keys.size());
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float width = count > 1 ? ImGui::GetFontSize() * kKeyBoxEms : row.value_width;
+    float end = row.value_x + row.value_width;
+    BindInput seen;
+    for (int i = 0; i < count; i++) {
+        const std::string& key = keys[size_t(i)];
+        float x = end - float(count - i) * width - float(count - 1 - i) * spacing;
+        ImGui::PushID(i);
+        BoxInput box = DrawKeyBox(row, {x, width, capturing == i}, key);
+        ImGui::PopID();
+        if (box.pressed) seen.pressed = i;
+        if (box.cleared) seen.cleared = i;
+        if (box.pointed && !key.empty() && key != kUnbound) seen.pointed = i;
+    }
     EndRow(row);
-    return pressed;
+    return seen;
 }
 
 void DrawBindRow(const Row& row) {
-    bool capturing = g_capture.action == row.id;
-    std::string keys = KeyText(input::Binding(size_t(row.id)));
-    bool pressed = BindRow(row.label, keys, capturing);
-    if (pressed && BindingSettled()) StartCapture(row.id);
+    int capturing = g_capture.action == row.id ? g_capture.slot : -1;
+    BindInput seen = BindRow(row.label, KeyBoxes(size_t(row.id)), capturing);
+    if (seen.pointed >= 0) g_hovered_box = seen.pointed;
+    // a Delete that answered a capture is no clear
+    if (seen.cleared >= 0 && BindingSettled()) input::Bind(size_t(row.id), 0, seen.cleared);
+    if (seen.pressed >= 0 && BindingSettled()) StartCapture(row.id, seen.pressed);
 }
 
 void DrawRow(const Row& row) {
@@ -668,6 +760,7 @@ void RestoreDefaults(int page) {
         options.mouse_sensitivity = defaults.mouse_sensitivity;
         options.invert_mouse = defaults.invert_mouse;
         options.camera_centring = defaults.camera_centring;
+        options.walk_speed = defaults.walk_speed;
         input::ResetBindings();
     }
 }
@@ -719,8 +812,14 @@ void DrawTitle() {
 }
 
 void DrawHint() {
+    const char* hint = "";
+    if (Capturing()) {
+        hint = "Press a key or mouse button to bind, Escape cancels";
+    } else if (g_page == kInputPage && g_hovered_box >= 0) {
+        hint = "Right click or Delete clears the key";
+    }
     ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    ImGui::TextUnformatted(Capturing() ? "Press a key or mouse button to bind, Escape cancels" : "");
+    ImGui::TextUnformatted(hint);
     ImGui::PopStyleColor();
 }
 
@@ -765,6 +864,7 @@ void DrawPanel() {
         DrawTabs();
         float footer = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() + em;
         ImGui::BeginChild("##rows", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
+        g_hovered_box = -1;
         size_t count = 0;
         const Row* list = rows::Page(g_page, &count);
         for (size_t i = 0; i < count; i++) DrawRow(list[i]);
@@ -848,7 +948,7 @@ std::string rows::Value(const Row& row, int step) {
 void rows::Defaults(int page) { RestoreDefaults(page); }
 
 void rows::Bind(const Row& row) {
-    if (row.kind == Kind::Bind && !Capturing()) StartCapture(row.id);
+    if (row.kind == Kind::Bind && !Capturing()) StartCapture(row.id, 0);
 }
 
 bool MenuOpen() { return g_open.load(std::memory_order_relaxed); }

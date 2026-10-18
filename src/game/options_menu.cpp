@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "common/menu.h"
+#include "common/mouse_keyboard.h"
 #include "game/options_menu.h"
 #include "core/log.h"
 #include "xdk/hle.h"
@@ -281,6 +282,12 @@ void MovePageCursor(X86Context& ctx, int step) {
 void StepRow(int step) {
     const Row* row = PageRow(g_state.top + CursorIndex());
     if (row && row->kind == Kind::Value) app::rows::Value(*row, step);
+}
+
+// Delete on a binding row
+void UnbindFocusedRow() {
+    const Row* row = PageRow(g_state.top + CursorIndex());
+    if (row && row->kind == Kind::Bind) input::Unbind(size_t(row->id));
 }
 
 void ActivateRow() {
@@ -658,6 +665,9 @@ void DrawCopies(X86Context& ctx, uint32_t field, const Field& seen) {
 
 // once a frame, at the frame's end: the next frame's rows come from what this one drew
 void LatchOptionsMenu(X86Context&, uint8_t*) {
+    // read every frame, so a Delete that answered a key capture is not a fresh press once it ends
+    bool unbind = input::TakeDeletePress();
+    if (unbind && PageOpen() && OwnsScreen(g_state.screen) && !input::CaptureRecent()) UnbindFocusedRow();
     g_layout = MakeLayout(g_now);
     g_now = {};
     g_order = {};

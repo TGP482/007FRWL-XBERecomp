@@ -31,11 +31,15 @@ bool Take(intptr_t* result) {
     return true;
 }
 
-// the panel's key opens and closes it, Escape closes it unless a key is being bound
+// the panel's key opens and closes it, Escape closes it unless a key is being bound; the HUD key toggles the HUD
 bool PanelKeyDown(uint32_t msg, uintptr_t key, intptr_t lp, intptr_t* result) {
     bool first_press = !(lp & kKeyWasDown);
     if (first_press && input::PanelKey(int(key))) {
         app::ToggleMenu();
+        return Take(result);
+    }
+    if (first_press && !app::MenuOpen() && input::HudKey(int(key))) {
+        g_hide_hud = !g_hide_hud;
         return Take(result);
     }
     bool binding = app::Capturing() || input::CaptureRecent();
@@ -91,6 +95,13 @@ void Pad(int port, input::Pad& pad) {
     } else if (port == 0) {
         input::Keyboard(pad);
     }
+}
+
+// no vibration while the keyboard and mouse are in use
+void Rumble(int port, uint16_t& left, uint16_t& right) {
+    if (port != 0 || !input::KeyboardActive()) return;
+    left = 0;
+    right = 0;
 }
 
 // what the options list cannot hold
@@ -152,6 +163,7 @@ const app::GameInfo app::kGame = {
         {"smaa", &game::Opt().smaa, nullptr},
         {"fov", nullptr, &game::Opt().fov},
         {"fmv_scale", nullptr, &game::Opt().fmv_scale},
+        {"walk_speed", nullptr, &game::Opt().walk_speed},
     },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it
@@ -161,5 +173,5 @@ const app::GameInfo app::kGame = {
     .message = game::Message,               // window messages first; true takes one
     .ui = app::DrawUi,                      // ImGui drawing each frame
     .pad = game::Pad,                       // changes a polled pad
-    .rumble = nullptr,                      // changes a rumble before it is set
+    .rumble = game::Rumble,                 // changes a rumble before it is set
 };

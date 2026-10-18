@@ -26,6 +26,8 @@ constexpr uint32_t kImagePivotX = 0x50;  // share of the width left of the posit
 constexpr uint32_t kMeterDraw = 0x399B20;
 constexpr uint32_t kMeterWidth = 0x94;  // the whole bar, the fill is drawn inside it
 
+constexpr uint32_t kDrawArgBytes = 4;  // a widget's Draw is thiscall (screen position), ret 4
+
 // Im2D vertex: x, y, z, rhw, colour, u, v
 constexpr uint32_t kVertexStride = 0x1C;
 constexpr uint32_t kAxisX = 0x00;
@@ -65,8 +67,10 @@ Span WidgetSpan(uint32_t widget, float x) {
     return {left, left + width};
 }
 
+bool CoversScreen(Span span) { return span.left <= 0 && span.right >= 1; }
+
 float AnchorFor(Span span) {
-    if (span.left <= 0 && span.right >= 1) return kOff;  // across the whole screen
+    if (CoversScreen(span)) return kOff;
     float middle = (span.left + span.right) / 2;
     if (std::fabs(middle - kCentre) < kMiddleBand) return kCentre;
     return middle < kCentre ? kLeft : kRight;
@@ -136,6 +140,15 @@ void HudWidgetBegin(X86Context& ctx, uint8_t*) {
 
 // after the widget's Draw
 void HudWidgetEnd(X86Context&, uint8_t*) { g_anchor = kOff; }
+
+// hidden HUD: only widgets covering the screen draw; false skips the Draw and pops its argument as its ret would
+bool HudWidgetShown(X86Context& ctx, uint8_t*) {
+    if (!game::g_hide_hud) return true;
+    float x = G<float>(R32(ctx.esp));
+    if (CoversScreen(WidgetSpan(ctx.esi, x))) return true;
+    ctx.esp += kDrawArgBytes;
+    return false;
+}
 
 // around the Flash player's render, 0x412F1F
 void MenuDrawBegin(X86Context&, uint8_t*) {
