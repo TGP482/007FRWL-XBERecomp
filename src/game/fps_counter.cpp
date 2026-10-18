@@ -14,7 +14,6 @@ constexpr uint32_t kTextManager = 0x77F70C;
 constexpr uint32_t kSetColour = 0x355E10;  // palette index
 constexpr uint32_t kDrawText = 0x357920;   // page position {x, y}, scale, text, alignment
 constexpr uint32_t kManagerFont = 0x1C;
-constexpr uint32_t kManagerCamera = 0x28;
 constexpr uint32_t kManagerGlyphScale = 0x4C;
 constexpr uint32_t kManagerPageWidth = 0x60;
 constexpr uint32_t kManagerPageHeight = 0x64;
@@ -27,6 +26,27 @@ constexpr uint32_t kAlignLeft = 0;
 constexpr uint32_t kCamera = 0x826EBC;
 constexpr uint32_t kBeginUpdate = 0x264600;
 constexpr uint32_t kEndUpdate = 0x2645F0;
+constexpr uint32_t kRenderStateSet = 0x84C6E0;  // import slot, cdecl (state, value)
+
+// the HUD's own 2D pass (0x359900): its camera, 2D device and render states
+constexpr uint32_t kOverlayCameras = 0x778E64;
+constexpr uint32_t kOverlayCamera = 0x337B50;  // thiscall (camera), the overlay camera drawn over it
+constexpr uint32_t kSetCamera2d = 0x24ED50;
+constexpr uint32_t kSetViewWindow2d = 0x24F660;  // x, y, width, height
+constexpr uint32_t kPushMatrix2d = 0x24F0B0;
+constexpr uint32_t kIdentity2d = 0x24EB00;
+constexpr uint32_t kPopMatrix2d = 0x24F210;
+constexpr uint32_t kSetTextCamera = 0x355E60;  // thiscall (camera)
+constexpr uint32_t kManagerDepth = 0x2C;
+constexpr uint32_t kOverlayDepth = 0x84C6D8;  // float the HUD copies into the text manager
+
+struct RenderState {
+    uint32_t state;
+    uint32_t value;
+};
+
+// blend, vertex alpha on, no culling, depth test, depth write or fog, as the HUD sets them
+constexpr RenderState kOverlayStates[] = {{0x0A, 5}, {0x0B, 6}, {0x0C, 1}, {0x1E, 0}, {0x06, 0}, {0x08, 0}, {0x0E, 0}};
 
 // as on the other recomps: top left, 8 lines in on a page 480 high, a one line shadow
 constexpr float kLeft = 0.009f;  // of the page width
@@ -66,6 +86,21 @@ void Show(X86Context& ctx, uint32_t colour, Place place, uint32_t position, uint
     kernel::CallGuest(ctx, kDrawText, {position, Bits(kScale), text, kAlignLeft});
 }
 
+// the state the HUD pass draws its text in, so the counter does not depend on what else was drawn this frame
+void BeginOverlay(X86Context& ctx, uint32_t manager, uint32_t camera) {
+    using namespace kernel;
+    CallGuest(ctx, kBeginUpdate, {camera});
+    CallGuest(ctx, kSetCamera2d, {camera});
+    CallGuest(ctx, kSetViewWindow2d, {Bits(0.0f), Bits(0.0f), Bits(1.0f), Bits(1.0f)});
+    uint32_t render_state_set = R32(kRenderStateSet);
+    for (RenderState rs : kOverlayStates) CallGuest(ctx, render_state_set, {rs.state, rs.value});
+    CallGuest(ctx, kPushMatrix2d, {});
+    CallGuest(ctx, kIdentity2d, {});
+    ctx.ecx = manager;
+    CallGuest(ctx, kSetTextCamera, {camera});
+    G<float>(manager + kManagerDepth) = G<float>(kOverlayDepth);
+}
+
 }  // namespace
 
 // the frame is finished and about to be shown
@@ -74,7 +109,7 @@ void DrawFps(X86Context& ctx, uint8_t*) {
     uint32_t manager = R32(kTextManager);
     uint32_t cam = R32(kCamera);
     if (!game::Opt().fps_counter || !manager || !cam) return;
-    if (!R32(manager + kManagerFont) || !R32(manager + kManagerCamera)) return;
+    if (!R32(manager + kManagerFont)) return;
     uint32_t position = Scratch();
     uint32_t text = position + 8;
     char line[kMaxChars];
@@ -83,16 +118,19 @@ void DrawFps(X86Context& ctx, uint8_t*) {
         G<char>(text + i) = line[i];
         if (!line[i]) break;
     }
+    uint32_t frame_ecx = ctx.ecx;
+    ctx.ecx = R32(kOverlayCameras);
+    uint32_t overlay = ctx.ecx ? CallGuest(ctx, kOverlayCamera, {cam}) : cam;
+    BeginOverlay(ctx, manager, overlay);
     Place place = TopLeft(manager);
     Place shadow = {place.x + kShadowX * G<float>(manager + kManagerPageWidth),
                     place.y - kShadowY * G<float>(manager + kManagerPageHeight)};
-    uint32_t frame_ecx = ctx.ecx;
-    CallGuest(ctx, kBeginUpdate, {cam});
     HudAnchorLeft(true);
     ctx.ecx = manager;  // the text manager's calls are thiscall
     Show(ctx, kBlack, shadow, position, text);
     Show(ctx, kWhite, place, position, text);
-    ctx.ecx = frame_ecx;
     HudAnchorLeft(false);
-    CallGuest(ctx, kEndUpdate, {cam});
+    CallGuest(ctx, kPopMatrix2d, {});
+    CallGuest(ctx, kEndUpdate, {overlay});
+    ctx.ecx = frame_ecx;
 }
