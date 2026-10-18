@@ -13,6 +13,9 @@ namespace {
 constexpr uint32_t kTextManager = 0x77F70C;
 constexpr uint32_t kSetColour = 0x355E10;  // palette index
 constexpr uint32_t kDrawText = 0x357920;   // page position {x, y}, scale, text, alignment
+constexpr uint32_t kSetFont = 0x355D70;    // font id, false and no font when it is not loaded
+constexpr uint32_t kFontId = 0x3A7E60;     // cdecl (name), the hash fonts are registered under
+constexpr uint32_t kDinSmall = 0x6D2FAC;   // "din_small", the Flash menus' default font
 constexpr uint32_t kManagerFont = 0x1C;
 constexpr uint32_t kManagerGlyphScale = 0x4C;
 constexpr uint32_t kManagerPageWidth = 0x60;
@@ -86,6 +89,16 @@ void Show(X86Context& ctx, uint32_t colour, Place place, uint32_t position, uint
     kernel::CallGuest(ctx, kDrawText, {position, Bits(kScale), text, kAlignLeft});
 }
 
+// the counter's own font, whatever the game drew last; returns the font to put back
+uint32_t ApplyFont(X86Context& ctx, uint32_t manager) {
+    using namespace kernel;
+    uint32_t previous = R32(manager + kManagerFont);
+    uint32_t id = CallGuest(ctx, kFontId, {kDinSmall});
+    ctx.ecx = manager;
+    if (!(CallGuest(ctx, kSetFont, {id}) & 0xFF)) W32(manager + kManagerFont, previous);
+    return previous;
+}
+
 // the state the HUD pass draws its text in, so the counter does not depend on what else was drawn this frame
 void BeginOverlay(X86Context& ctx, uint32_t manager, uint32_t camera) {
     using namespace kernel;
@@ -122,6 +135,7 @@ void DrawFps(X86Context& ctx, uint8_t*) {
     ctx.ecx = R32(kOverlayCameras);
     uint32_t overlay = ctx.ecx ? CallGuest(ctx, kOverlayCamera, {cam}) : cam;
     BeginOverlay(ctx, manager, overlay);
+    uint32_t previous_font = ApplyFont(ctx, manager);
     Place place = TopLeft(manager);
     Place shadow = {place.x + kShadowX * G<float>(manager + kManagerPageWidth),
                     place.y - kShadowY * G<float>(manager + kManagerPageHeight)};
@@ -130,6 +144,7 @@ void DrawFps(X86Context& ctx, uint8_t*) {
     Show(ctx, kBlack, shadow, position, text);
     Show(ctx, kWhite, place, position, text);
     HudAnchorLeft(false);
+    W32(manager + kManagerFont, previous_font);
     CallGuest(ctx, kPopMatrix2d, {});
     CallGuest(ctx, kEndUpdate, {overlay});
     ctx.ecx = frame_ecx;

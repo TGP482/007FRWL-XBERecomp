@@ -387,6 +387,11 @@ call = "MenuDrawBegin"
 at = 0x412F24
 call = "MenuDrawEnd"
 
+# Flash menus' tick, the frame time in whole milliseconds: the fraction is carried
+[[hook]]
+at = 0x411183
+call = "FlashTickMs"
+
 # frame tick, after the pads are read: the mouse in the Flash menus
 [[hook]]
 at = 0x224BE2
