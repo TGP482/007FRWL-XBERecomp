@@ -993,6 +993,8 @@ private:
         bool sized;  // the entry is there at the surface's size
     };
     Target* FindTarget(const Surface& s, bool depth);
+    uint64_t SizedTargetKey(uint32_t data, bool depth, uint32_t gw, uint32_t gh) const;
+    std::unordered_map<uint64_t, Target>::iterator TargetAt(uint32_t data, bool depth);
     Target* EnsureTarget(const Surface& s, bool depth);
     // EnsureTarget's steps, in call order
     TargetSlot FindTargetSlot(const Surface& s, bool depth, uint64_t alt);
@@ -1488,12 +1490,28 @@ bool D3D12Backend::CreateTargetView(Target& t) {
 // targets_ key of a surface's colour or depth target
 uint64_t TargetMapKey(uint32_t data, bool depth) { return uint64_t(data) << 1 | (depth ? 1 : 0); }
 
+constexpr uint64_t kOtherSizeKey = 1ull << 33;  // above the address and depth bits
+
+// a surface not the main buffer's size keeps a target apart from that size's at the same address
+uint64_t D3D12Backend::SizedTargetKey(uint32_t data, bool depth, uint32_t gw, uint32_t gh) const {
+    uint64_t key = TargetMapKey(data, depth);
+    bool main_size = gw == guest_w_ && gh == guest_h_;
+    return main_size ? key : key | kOtherSizeKey;
+}
+
+// the target at data, the main buffer's size first
+std::unordered_map<uint64_t, Target>::iterator D3D12Backend::TargetAt(uint32_t data, bool depth) {
+    auto it = targets_.find(TargetMapKey(data, depth));
+    if (it != targets_.end()) return it;
+    return targets_.find(TargetMapKey(data, depth) | kOtherSizeKey);
+}
+
 // alt: the extension's bits of the key
 D3D12Backend::TargetSlot D3D12Backend::FindTargetSlot(const Surface& s, bool depth, uint64_t alt) {
     TargetSlot slot;
     slot.data = mem::VirtualFromPhysical(s.data);
-    slot.key = TargetMapKey(slot.data, depth) | alt;
     SurfaceSize(s, slot.gw, slot.gh);
+    slot.key = SizedTargetKey(slot.data, depth, slot.gw, slot.gh) | alt;
     slot.it = targets_.find(slot.key);
     slot.sized = slot.it != targets_.end() && slot.it->second.gw == slot.gw && slot.it->second.gh == slot.gh;
     return slot;
@@ -1577,8 +1595,11 @@ bool D3D12Backend::DepthCopy(const State& s) {
         d.depth != 1) {
         return false;
     }
-    auto di = targets_.find(TargetMapKey(mem::VirtualFromPhysical(s.rt.data), true));
-    auto si = targets_.find(TargetMapKey(d.data, true));
+    uint32_t gw;
+    uint32_t gh;
+    SurfaceSize(s.rt, gw, gh);
+    auto di = targets_.find(SizedTargetKey(mem::VirtualFromPhysical(s.rt.data), true, gw, gh));
+    auto si = targets_.find(SizedTargetKey(d.data, true, d.width, d.height));
     if (di == targets_.end() || si == targets_.end() || di == si) return false;
     Target& dst = di->second;
     Target& src = si->second;
@@ -2261,7 +2282,8 @@ ID3D12Resource* D3D12Backend::BindTexture(const State& s, int stage, DrawTexture
     uint64_t alt = 0;
     bool box = true;
     if (ext_) ext_->Sample(d.data, fi.depth, stage, alt, stages.k[stage], box);
-    auto tit = targets_.find(TargetMapKey(d.data, fi.depth) | alt);
+    auto tit = targets_.find(SizedTargetKey(d.data, fi.depth, d.width, d.height) | alt);
+    if (tit == targets_.end() && !alt) tit = TargetAt(d.data, fi.depth);
     if (tit != targets_.end() && !d.cube && d.depth == 1 && !fi.compressed) {
         return BindTargetTexture(s, stage, d, tit->second, box, stages);
     }
@@ -2755,7 +2777,7 @@ void D3D12Backend::CaptureTextures(const State& s, const DrawTextures& stages) {
         ID3D12Resource* res = stages.res[i];
         TextureDesc d;
         if (!s.textures[size_t(i)] || !Describe(s.textures[size_t(i)], d)) continue;
-        bool tg = targets_.count(TargetMapKey(d.data, Format(d.format).depth));
+        bool tg = TargetAt(d.data, Format(d.format).depth) != targets_.end();
         fprintf(cap_, " | t%d %08X fmt %X %ux%u%s%s", i, d.data, d.format, d.width, d.height, tg ? " target" : "",
                 res ? "" : " unbound");
         if (res && !tg && stages.info[i].kind == kTex2D && cap_seen_.insert(d.data).second) {
@@ -4007,7 +4029,7 @@ D3D12Backend::CopySource D3D12Backend::PrepareCopySource(Target& t, const Shrink
 
 // the CPU reads a surface the GPU drew: bring the pixels back
 void D3D12Backend::Sync(uint32_t data, uint32_t) {
-    auto it = targets_.find(TargetMapKey(data, false));
+    auto it = TargetAt(data, false);
     if (it == targets_.end() || !it->second.drawn) return;
     PerfScope perf_sync{g_perf.sync};
     g_perf.syncs++;
@@ -4125,7 +4147,7 @@ void D3D12Backend::RecordLateCopy(Late& l, uint32_t slot, ID3D12Resource* src) {
 }
 
 void D3D12Backend::RecordLate(uint32_t data) {
-    auto it = targets_.find(TargetMapKey(data, false));
+    auto it = TargetAt(data, false);
     if (it == targets_.end()) return;
     Target& t = it->second;
     PerfScope perf_sync{g_perf.sync};
@@ -4250,13 +4272,13 @@ void D3D12Backend::CapSave(Target& t, const char* name) {
 void D3D12Backend::CapStep(const Surface& rt) {
     uint32_t d = rt.header ? mem::VirtualFromPhysical(rt.data) : 0;
     if (d == cap_rt_) return;
-    auto it = targets_.find(TargetMapKey(cap_rt_, false));
+    auto it = TargetAt(cap_rt_, false);
     if (cap_rt_ && it != targets_.end()) {
         char name[32];
         snprintf(name, sizeof(name), "%04u_%08X", cap_i_, cap_rt_);
         CapSave(it->second, name);
     }
-    auto z = targets_.find(TargetMapKey(cap_rt_, true));
+    auto z = TargetAt(cap_rt_, true);
     if (cap_rt_ && z != targets_.end()) {
         char name[32];
         snprintf(name, sizeof(name), "%04u_%08X_z", cap_i_, cap_rt_);
