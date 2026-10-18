@@ -16,6 +16,7 @@ struct Options {
     uint32_t audio_output = 0;  // audio::kOutputAuto, kOutputStereo, kOutputSurround or kOutputMono
     float mouse_sensitivity = 1.0f;
     uint32_t msaa = 0;  // samples a pixel of the scene, 0 off
+    bool smaa = false;  // over the finished frame, HUD included; combines with msaa
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };
 Options& Opt();

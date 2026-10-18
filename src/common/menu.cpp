@@ -259,6 +259,12 @@ std::string StepAniso(Settings& s, int step) { return kAnisoNames[StepTable(kAni
 
 std::string StepMsaa(Settings&, int step) { return kMsaaNames[StepTable(kMsaaValues, game::Opt().msaa, step)]; }
 
+std::string StepSmaa(Settings&, int step) {
+    bool& on = game::Opt().smaa;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
 std::string StepAmbientOcclusion(Settings&, int step) {
     return kAoNames[StepTable(kAoValues, game::Opt().ambient_occlusion, step)];
 }
@@ -324,6 +330,7 @@ enum RowId {
     kAudioOutputRow,
     kHdrOutputRow,
     kMsaaRow,
+    kSmaaRow,
 };
 
 // in RowId order
@@ -343,6 +350,7 @@ constexpr StepFn kSteps[] = {
     StepAudioOutput,
     StepHdrOutput,
     StepMsaa,
+    StepSmaa,
 };
 
 bool Held(int id) { return id == kDisplayModeRow || id == kResolutionRow; }
@@ -364,6 +372,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kFpsCounterRow, "FPS COUNTER"},
     {Kind::Heading, -1, "GRAPHICS"},
     {Kind::Value, kMsaaRow, "MSAA"},
+    {Kind::Value, kSmaaRow, "SMAA"},
     {Kind::Value, kAnisoRow, "ANISOTROPIC FILTERING"},
     {Kind::Value, kAmbientOcclusionRow, "AMBIENT OCCLUSION"},
     {Kind::Heading, -1, "GENERAL"},
@@ -621,6 +630,7 @@ void RestoreDefaults(int page) {
         game::Opt().hdr_output = defaults.hdr_output;
         game::Opt().audio_output = defaults.audio_output;
         game::Opt().msaa = defaults.msaa;
+        game::Opt().smaa = defaults.smaa;
         audio::SetOutputMode(defaults.audio_output);
         RestoreSettingsDefaults();
     } else {

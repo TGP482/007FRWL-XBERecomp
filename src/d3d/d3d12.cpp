@@ -35,6 +35,8 @@
 #include "core/diag.h"
 #include "core/log.h"
 #include "d3d/occlusion.h"
+#include "d3d/smaa_shader.h"
+#include "d3d/smaa_textures.h"
 #include "gpu/backend.h"
 #include "gpu/ext.h"
 #include "gpu/shaders.h"
@@ -182,6 +184,65 @@ float4 hdr10(O i) : SV_Target {
     return float4(pq(mul(k709To2020, lerp(f, panel, u.a))), 1);
 }
 )";
+
+const char* kSmaaConfig = R"(
+cbuffer P : register(b1) { float4 metrics; };
+#define SMAA_RT_METRICS metrics
+#define SMAA_CUSTOM_SL
+#define SMAA_THRESHOLD 0.05
+#define SMAA_MAX_SEARCH_STEPS 16
+#define SMAA_MAX_SEARCH_STEPS_DIAG 8
+#define SMAA_CORNER_ROUNDING 25
+SamplerState LinearSampler : register(s0);
+SamplerState PointSampler : register(s1);
+#define SMAATexture2D(tex) Texture2D tex
+#define SMAATexturePass2D(tex) tex
+#define SMAASampleLevelZero(tex, coord) tex.SampleLevel(LinearSampler, coord, 0)
+#define SMAASampleLevelZeroPoint(tex, coord) tex.SampleLevel(PointSampler, coord, 0)
+#define SMAASampleLevelZeroOffset(tex, coord, offset) tex.SampleLevel(LinearSampler, coord, 0, offset)
+#define SMAASample(tex, coord) tex.Sample(LinearSampler, coord)
+#define SMAASamplePoint(tex, coord) tex.Sample(PointSampler, coord)
+#define SMAASampleOffset(tex, coord, offset) tex.Sample(LinearSampler, coord, offset)
+#define SMAAGather(tex, coord) tex.Gather(LinearSampler, coord, 0)
+#define SMAA_FLATTEN [flatten]
+#define SMAA_BRANCH [branch]
+)";
+
+// after kSmaaHlsl: edges from the frame's luma, blend weights from edges, area and search, then the frame blended
+const char* kSmaaPasses = R"(
+Texture2D tex0 : register(t0);
+Texture2D tex1 : register(t1);
+Texture2D tex2 : register(t2);
+struct SmaaEdgeV { float4 p : SV_Position; float2 uv : TEXCOORD0; float4 o[3] : TEXCOORD1; };
+struct SmaaWeightV { float4 p : SV_Position; float2 uv : TEXCOORD0; float2 pix : TEXCOORD1; float4 o[3] : TEXCOORD2; };
+struct SmaaBlendV { float4 p : SV_Position; float2 uv : TEXCOORD0; float4 o : TEXCOORD1; };
+float4 corner(uint id, out float2 uv) {
+    uv = float2((id << 1) & 2, id & 2);
+    return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+SmaaEdgeV vs_edges(uint id : SV_VertexID) {
+    SmaaEdgeV o;
+    o.p = corner(id, o.uv);
+    SMAAEdgeDetectionVS(o.uv, o.o);
+    return o;
+}
+SmaaWeightV vs_weights(uint id : SV_VertexID) {
+    SmaaWeightV o;
+    o.p = corner(id, o.uv);
+    SMAABlendingWeightCalculationVS(o.uv, o.pix, o.o);
+    return o;
+}
+SmaaBlendV vs_blend(uint id : SV_VertexID) {
+    SmaaBlendV o;
+    o.p = corner(id, o.uv);
+    SMAANeighborhoodBlendingVS(o.uv, o.o);
+    return o;
+}
+float4 smaa_edges(SmaaEdgeV i) : SV_Target { return float4(SMAALumaEdgeDetectionPS(i.uv, i.o, tex0), 0, 0); }
+float4 smaa_weights(SmaaWeightV i) : SV_Target { return SMAABlendingWeightCalculationPS(i.uv, i.pix, i.o, tex0, tex1, tex2, 0); }
+float4 smaa_blend(SmaaBlendV i) : SV_Target { return SMAANeighborhoodBlendingPS(i.uv, i.o, tex0, tex1); }
+)";
+constexpr int kSmaaTargets = 3;
 
 // the output showing monitor mon, false when no adapter has it
 bool FindOutput(IDXGIFactory4* factory, HMONITOR mon, DXGI_OUTPUT_DESC1& desc) {
@@ -791,11 +852,17 @@ private:
     void Resolve(Target& t) {
         if (t.range != 1 && ext_) ext_->Resolve(*this, t);
     }
-    // Pass, then its step
     void Pass(const char* hlsl, const char* entry, DXGI_FORMAT rtv, D3D12_CPU_DESCRIPTOR_HANDLE rh, uint32_t w,
               uint32_t h, ID3D12Resource* const src[3], const DXGI_FORMAT fmt[3], const float p[8],
-              float blend) override;
-    ID3D12PipelineState* EnsurePassPipeline(const char* hlsl, const char* entry, DXGI_FORMAT rtv, float blend);
+              float blend) override {
+        Pass(hlsl, "vs", entry, rtv, rh, w, h, src, fmt, p, blend);
+    }
+    // Pass, then its step
+    bool Pass(const char* hlsl, const char* vs_entry, const char* entry, DXGI_FORMAT rtv,
+              D3D12_CPU_DESCRIPTOR_HANDLE rh, uint32_t w, uint32_t h, ID3D12Resource* const src[3],
+              const DXGI_FORMAT fmt[3], const float p[8], float blend);
+    ID3D12PipelineState* EnsurePassPipeline(const char* hlsl, const char* vs_entry, const char* entry, DXGI_FORMAT rtv,
+                                            float blend);
     // Draw, in call order, each callee right after its caller
     bool DepthCopy(const State& s);
     bool DepthPass(ID3D12Resource* src, uint32_t src_samples, D3D12_CPU_DESCRIPTOR_HANDLE dh, uint32_t w, uint32_t h,
@@ -866,6 +933,22 @@ private:
     void UploadGammaRamp();
     void DrawFrame(Target* t, uint32_t bi);
     ID3D12Resource* PrepareShownFrame(Target* t);
+    ID3D12Resource* Smaa(ID3D12Resource* src, DXGI_FORMAT fmt, uint32_t w, uint32_t h);
+    struct SmaaLookup {
+        DXGI_FORMAT fmt;
+        uint32_t w;
+        uint32_t h;
+        uint32_t bpp;  // bytes per texel
+        const uint8_t* data;
+    };
+    bool EnsureSmaaLookups();
+    bool CreateLookupTexture(ComPtr<ID3D12Resource>& r, const SmaaLookup& l);
+    bool EnsureSmaaTargets(DXGI_FORMAT fmt, uint32_t w, uint32_t h);
+    bool CreateSmaaTarget(int i, DXGI_FORMAT fmt, uint32_t w, uint32_t h);
+    bool DrawSmaaPasses(ID3D12Resource* src, DXGI_FORMAT fmt, uint32_t w, uint32_t h, const char* hlsl);
+    D3D12_CPU_DESCRIPTOR_HANDLE SmaaView(int i) {
+        return Cpu(rtv_heap_.Get(), kRtvCount + kFrames + kAoTargets + kOutTargets + i, rtv_inc_);
+    }
     void DrawSdrFrame(Target* t, ID3D12Resource* r, D3D12_CPU_DESCRIPTOR_HANDLE bb);
     bool EnsureOutTargets();
     bool CreateOutTarget(int i, DXGI_FORMAT fmt);
@@ -1064,6 +1147,13 @@ private:
     D3D12_RESOURCE_STATES out_state_[kOutTargets] = {};
     uint32_t out_w_ = 0;
     uint32_t out_h_ = 0;
+    // SMAA: edges, blend weights and the blended frame, at the frame's size; its area and search lookups
+    ComPtr<ID3D12Resource> smaa_[kSmaaTargets];
+    ComPtr<ID3D12Resource> smaa_lut_[2];
+    D3D12_RESOURCE_STATES smaa_state_[kSmaaTargets] = {};
+    uint32_t smaa_w_ = 0;
+    uint32_t smaa_h_ = 0;
+    DXGI_FORMAT smaa_fmt_ = DXGI_FORMAT_UNKNOWN;
     uint64_t presents_ = 0;
     double fps_ = 0;
     std::chrono::steady_clock::time_point fps_t_ = std::chrono::steady_clock::now();
@@ -1164,7 +1254,7 @@ void D3D12Backend::CreateBackBufferViews() {
 void D3D12Backend::CreateHeaps() {
     srv_inc_ = CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kSrvCount, true, srv_heap_);
     smp_inc_ = CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, kSamplerCount, true, smp_heap_);
-    uint32_t rtv_count = kRtvCount + kFrames + kAoTargets + kOutTargets;
+    uint32_t rtv_count = kRtvCount + kFrames + kAoTargets + kOutTargets + kSmaaTargets;
     rtv_inc_ = CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, rtv_count, false, rtv_heap_);
     dsv_inc_ = CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kDsvCount, false, dsv_heap_);
     CreateHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, true, ui_heap_);
@@ -1735,15 +1825,17 @@ ID3D12PipelineState* D3D12Backend::EnsureBlitPipeline(DXGI_FORMAT rtv, bool over
 }
 
 // Pass's pipeline for the shader, kept in blit_psos_; null when it can't be made
-ID3D12PipelineState* D3D12Backend::EnsurePassPipeline(const char* hlsl, const char* entry, DXGI_FORMAT rtv,
-                                                      float blend) {
+ID3D12PipelineState* D3D12Backend::EnsurePassPipeline(const char* hlsl, const char* vs_entry, const char* entry,
+                                                      DXGI_FORMAT rtv, float blend) {
     uint64_t seed = uint64_t(rtv) << 1 | (blend >= 0 ? 1 : 0);
     uint64_t source_seed = Hash(hlsl, std::strlen(hlsl), seed);
-    auto& pso = blit_psos_[Hash(entry, std::strlen(entry), source_seed)];
+    uint64_t entry_seed = Hash(entry, std::strlen(entry), source_seed);
+    auto& pso = blit_psos_[Hash(vs_entry, std::strlen(vs_entry), entry_seed)];
     if (pso) return pso.Get();
-    uint64_t h;
-    ID3DBlob* vs = Compile(hlsl, "vs", "vs_5_0", h);
-    ID3DBlob* ps = Compile(hlsl, entry, "ps_5_0", h);
+    uint64_t hv;
+    uint64_t hp;
+    ID3DBlob* vs = Compile(hlsl, vs_entry, "vs_5_0", hv);
+    ID3DBlob* ps = Compile(hlsl, entry, "ps_5_0", hp);
     if (!vs || !ps) return nullptr;
     D3D12_GRAPHICS_PIPELINE_STATE_DESC d = FullScreenPipelineDesc(vs, ps, rtv);
     if (blend >= 0) {
@@ -1757,11 +1849,11 @@ ID3D12PipelineState* D3D12Backend::EnsurePassPipeline(const char* hlsl, const ch
     return pso.Get();
 }
 
-void D3D12Backend::Pass(const char* hlsl, const char* entry, DXGI_FORMAT rtv, D3D12_CPU_DESCRIPTOR_HANDLE rh,
-                        uint32_t w, uint32_t h, ID3D12Resource* const src[3], const DXGI_FORMAT fmt[3],
-                        const float p[8], float blend) {
-    ID3D12PipelineState* pso = EnsurePassPipeline(hlsl, entry, rtv, blend);
-    if (!pso) return;
+bool D3D12Backend::Pass(const char* hlsl, const char* vs_entry, const char* entry, DXGI_FORMAT rtv,
+                        D3D12_CPU_DESCRIPTOR_HANDLE rh, uint32_t w, uint32_t h, ID3D12Resource* const src[3],
+                        const DXGI_FORMAT fmt[3], const float p[8], float blend) {
+    ID3D12PipelineState* pso = EnsurePassPipeline(hlsl, vs_entry, entry, rtv, blend);
+    if (!pso) return false;
     uint32_t slot = AllocSrvSlots(4);
     for (int i = 0; i < 4; i++) {
         D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
@@ -1781,6 +1873,7 @@ void D3D12Backend::Pass(const char* hlsl, const char* entry, DXGI_FORMAT rtv, D3
     }
     DrawFullScreen(pso, cb.gpu, slot);
     bound_rt_ = bound_ds_ = nullptr;
+    return true;
 }
 
 // a single sample copy of the target to read: while drawing to it, or of a multisampled one
@@ -3517,15 +3610,129 @@ void D3D12Backend::DrawFrame(Target* t, uint32_t bi) {
     Transition(bb_[bi].Get(), bs, D3D12_RESOURCE_STATE_PRESENT);
 }
 
-// what the frame shows: the target made readable
+// what the frame shows: the target made readable, SMAA's blend of it when that is on
 ID3D12Resource* D3D12Backend::PrepareShownFrame(Target* t) {
     if (!t) return nullptr;
     D3D12_RESOURCE_STATES* st;
     ID3D12Resource* r = Flat(*t, st);
     if (!r) return nullptr;
     Transition(r, *st, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    if (game::Opt().smaa) {
+        if (ID3D12Resource* aa = Smaa(r, t->fmt, t->w, t->h)) r = aa;
+    }
     return r;
 }
+
+// src in the pixel shader resource state: SMAA's blend of it, null when it can't run
+ID3D12Resource* D3D12Backend::Smaa(ID3D12Resource* src, DXGI_FORMAT fmt, uint32_t w, uint32_t h) {
+    static const std::string hlsl = std::string(kSmaaConfig) + kSmaaHlsl + kSmaaPasses;
+    if (!EnsureSmaaLookups()) return nullptr;
+    if (!EnsureSmaaTargets(fmt, w, h)) return nullptr;
+    if (!DrawSmaaPasses(src, fmt, w, h, hlsl.c_str())) return nullptr;
+    return smaa_[2].Get();
+}
+
+bool D3D12Backend::EnsureSmaaLookups() {
+    // smaa_textures.h: area 160 x 560 in two channels, search 64 x 16 in one
+    constexpr SmaaLookup area{DXGI_FORMAT_R8G8_UNORM, 160, 560, 2, kSmaaArea};
+    constexpr SmaaLookup search{DXGI_FORMAT_R8_UNORM, 64, 16, 1, kSmaaSearch};
+    static_assert(sizeof(kSmaaArea) == area.w * area.h * area.bpp);
+    static_assert(sizeof(kSmaaSearch) == search.w * search.h * search.bpp);
+    if (smaa_lut_[1]) return true;
+    if (!CreateLookupTexture(smaa_lut_[0], area) || !CreateLookupTexture(smaa_lut_[1], search)) {
+        smaa_lut_[0].Reset();
+        smaa_lut_[1].Reset();
+        return false;
+    }
+    return true;
+}
+
+// a lookup texture filled from l's data, left in the pixel shader resource state
+bool D3D12Backend::CreateLookupTexture(ComPtr<ID3D12Resource>& r, const SmaaLookup& l) {
+    D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_DEFAULT};
+    D3D12_RESOURCE_DESC td = Texture2DDesc(l.fmt, l.w, l.h);
+    D3D12_RESOURCE_STATES st = D3D12_RESOURCE_STATE_COPY_DEST;
+    if (FAILED(dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, st, nullptr, IID_PPV_ARGS(&r)))) {
+        return false;
+    }
+    uint32_t row = l.w * l.bpp;
+    uint32_t pitch = UploadPitch(row);
+    Alloc a = Upload(uint64_t(pitch) * l.h, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+    for (uint32_t y = 0; y < l.h; y++) std::memcpy(a.cpu + size_t(y) * pitch, l.data + size_t(y) * row, row);
+    D3D12_TEXTURE_COPY_LOCATION dl{r.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    D3D12_TEXTURE_COPY_LOCATION sl{a.res, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    sl.PlacedFootprint.Offset = a.off;
+    sl.PlacedFootprint.Footprint = {l.fmt, l.w, l.h, 1, pitch};
+    cl_->CopyTextureRegion(&dl, 0, 0, 0, &sl, nullptr);
+    Transition(r.Get(), st, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    return true;
+}
+
+// SMAA's own targets: edges, then blend weights, then the blended frame in the frame's format
+constexpr DXGI_FORMAT kSmaaEdgeFormat = DXGI_FORMAT_R8G8_UNORM;
+constexpr DXGI_FORMAT kSmaaWeightFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+bool D3D12Backend::EnsureSmaaTargets(DXGI_FORMAT fmt, uint32_t w, uint32_t h) {
+    if (smaa_[2] && smaa_w_ == w && smaa_h_ == h && smaa_fmt_ == fmt) return true;
+    smaa_w_ = smaa_h_ = 0;
+    const DXGI_FORMAT f[kSmaaTargets] = {kSmaaEdgeFormat, kSmaaWeightFormat, fmt};
+    for (int i = 0; i < kSmaaTargets; i++) {
+        if (!CreateSmaaTarget(i, f[i], w, h)) {
+            for (auto& r : smaa_) {
+                if (r) Release(std::move(r));
+            }
+            return false;
+        }
+    }
+    smaa_w_ = w;
+    smaa_h_ = h;
+    smaa_fmt_ = fmt;
+    LOGI("d3d12: SMAA %ux%u", w, h);
+    return true;
+}
+
+bool D3D12Backend::CreateSmaaTarget(int i, DXGI_FORMAT fmt, uint32_t w, uint32_t h) {
+    if (smaa_[i]) Release(std::move(smaa_[i]));
+    D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_DEFAULT};
+    D3D12_RESOURCE_DESC td = Texture2DDesc(fmt, w, h);
+    td.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    smaa_state_[i] = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    HRESULT hr = dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, smaa_state_[i], nullptr,
+                                               IID_PPV_ARGS(&smaa_[i]));
+    if (FAILED(hr)) return false;
+    dev_->CreateRenderTargetView(smaa_[i].Get(), nullptr, SmaaView(i));
+    return true;
+}
+
+// edges, blend weights, then the blend of src into smaa_[2], left readable
+bool D3D12Backend::DrawSmaaPasses(ID3D12Resource* src, DXGI_FORMAT fmt, uint32_t w, uint32_t h, const char* hlsl) {
+    // edge detection discards where there is no edge, so the edges start clear each frame
+    const float clear[4] = {};
+    float p[8] = {1.0f / w, 1.0f / h, float(w), float(h)};
+    Transition(smaa_[0].Get(), smaa_state_[0], D3D12_RESOURCE_STATE_RENDER_TARGET);
+    cl_->ClearRenderTargetView(SmaaView(0), clear, 0, nullptr);
+    ID3D12Resource* const edges[3] = {src, nullptr, nullptr};
+    const DXGI_FORMAT edges_fmt[3] = {fmt, fmt, fmt};
+    if (!Pass(hlsl, "vs_edges", "smaa_edges", kSmaaEdgeFormat, SmaaView(0), w, h, edges, edges_fmt, p, -1)) {
+        return false;
+    }
+    Transition(smaa_[0].Get(), smaa_state_[0], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    Transition(smaa_[1].Get(), smaa_state_[1], D3D12_RESOURCE_STATE_RENDER_TARGET);
+    cl_->ClearRenderTargetView(SmaaView(1), clear, 0, nullptr);
+    ID3D12Resource* const weights[3] = {smaa_[0].Get(), smaa_lut_[0].Get(), smaa_lut_[1].Get()};
+    const DXGI_FORMAT weights_fmt[3] = {kSmaaEdgeFormat, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM};
+    if (!Pass(hlsl, "vs_weights", "smaa_weights", kSmaaWeightFormat, SmaaView(1), w, h, weights, weights_fmt, p, -1)) {
+        return false;
+    }
+    Transition(smaa_[1].Get(), smaa_state_[1], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    Transition(smaa_[2].Get(), smaa_state_[2], D3D12_RESOURCE_STATE_RENDER_TARGET);
+    ID3D12Resource* const blend[3] = {src, smaa_[1].Get(), nullptr};
+    const DXGI_FORMAT blend_fmt[3] = {fmt, kSmaaWeightFormat, fmt};
+    if (!Pass(hlsl, "vs_blend", "smaa_blend", fmt, SmaaView(2), w, h, blend, blend_fmt, p, -1)) return false;
+    Transition(smaa_[2].Get(), smaa_state_[2], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    return true;
+}
+
 
 void D3D12Backend::DrawSdrFrame(Target* t, ID3D12Resource* r, D3D12_CPU_DESCRIPTOR_HANDLE bb) {
     float black[4] = {0, 0, 0, 1};
