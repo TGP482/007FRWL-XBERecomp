@@ -2450,12 +2450,22 @@ void KeyOcclusionMark(PsoKey& k) {
     k.spass = kStencilReplace;
 }
 
+// The game blends and alpha tests its whole world, so only a texture that carries alpha makes a surface see through
+bool AlphaTexture(const State& s) {
+    constexpr uint32_t kAlphaFormats[] = {0x02, 0x04, 0x06, 0x0B, 0x10, 0x12, 0x19, 0x1D};  // ARGB, P8, A8
+    TextureDesc d;
+    if (!s.textures[0] || !Describe(s.textures[0], d)) return false;
+    Host host = Format(d.format).host;
+    if (host == Host::BC2 || host == Host::BC3) return true;
+    return std::find(std::begin(kAlphaFormats), std::end(kAlphaFormats), d.format) != std::end(kAlphaFormats);
+}
+
 bool Translucent(const State& s, const PsoKey& k) {
-    if (k.blend || SimpleState(s, kMAlphaTestEnable)) return true;
     for (int i = 0; i < 4; i++) {
         if (s.textures[i] && s.tss[size_t(i)][kTssAlphaKill] == kAlphaKillEnable) return true;
     }
-    return false;
+    bool see_through = k.blend || SimpleState(s, kMAlphaTestEnable);
+    return see_through && AlphaTexture(s);
 }
 
 // D3DCMP_LESSEQUAL

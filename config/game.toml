@@ -410,6 +410,11 @@ call = "ChaseFieldOfView"
 at = 0xB5DA6
 call = "ChaseFieldOfView"
 
+# camera director blend, after a camera's angle is read: the car and jetpack views take the field of view setting
+[[hook]]
+at = 0x38E39F
+call = "PlayFieldOfView"
+
 # UI widget tree walk, before each widget's Draw: the toggle HUD key hides the HUD
 [[hook]]
 at = 0x358423
