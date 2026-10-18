@@ -120,10 +120,10 @@ struct LegendText {
     Buttons buttons;
 };
 
-// a legend clip on screen and its text clip
+// a legend clip on screen and its text clips, the shadow and the text
 struct LegendClip {
     uint32_t clip;
-    uint32_t text;
+    std::vector<uint32_t> texts;
     std::string label;
 };
 
@@ -137,7 +137,8 @@ struct LegendState {
 LegendState g_legends;
 std::map<uint32_t, float> g_moved;  // legend texts moved into their hidden picture's room, by their place before
 
-// a legend moved along its row: where the movie put it and where it was last put
+// a legend text moved along its row: where it sat and where it was last put; the texts are moved, not the legend,
+// because the menus' timelines place their legends again each frame
 struct Placed {
     float base;
     float written;
@@ -267,51 +268,64 @@ void ApplyLegend(X86Context& ctx, uint32_t clip, const Legend& legend, bool keyb
         if (!field) continue;
         UpdateTextPlace(ctx, child, picture, keyboard);
         if (g_legends.clips.empty() || g_legends.clips.back().clip != clip) {
-            g_legends.clips.push_back({clip, child, ShownText(field)});
+            g_legends.clips.push_back({clip, {}, ShownText(field)});
         }
+        g_legends.clips.back().texts.push_back(child);
         if (keyboard) g_legends.texts.push_back({ShownText(field), legend.buttons});
     }
 }
 
-// the legend's x as the movie last put it; the shift is written over it
-void PlaceLegend(uint32_t clip, float shift) {
-    float& x = G<float>(clip + kMatrixTx);
-    auto placed = g_placed.find(clip);
+// how far the text is moved now
+float ShiftOf(uint32_t text) {
+    auto placed = g_placed.find(text);
+    bool ours = placed != g_placed.end() && placed->second.written == G<float>(text + kMatrixTx);
+    return ours ? placed->second.written - placed->second.base : 0.0f;
+}
+
+// the text's x where it sat; the shift is written over it
+void PlaceText(uint32_t text, float shift) {
+    float& x = G<float>(text + kMatrixTx);
+    auto placed = g_placed.find(text);
     if (placed == g_placed.end() || placed->second.written != x) {
-        placed = g_placed.insert_or_assign(clip, Placed{x, x}).first;
+        placed = g_placed.insert_or_assign(text, Placed{x, x}).first;
     }
     x = placed->second.base + shift;
     placed->second.written = x;
 }
 
-// legends gone from the screen are forgotten; with the pad the rest go back where the movie put them
+void PlaceLegend(const LegendClip& legend, float shift) {
+    for (uint32_t text : legend.texts) PlaceText(text, shift);
+}
+
+// texts gone from the screen are forgotten; with the pad the rest go back where they sat
 void UpdatePlaced(bool keyboard) {
     std::map<uint32_t, Placed> kept;
     for (const LegendClip& legend : g_legends.clips) {
-        auto placed = g_placed.find(legend.clip);
-        if (placed == g_placed.end()) continue;
-        float& x = G<float>(legend.clip + kMatrixTx);
-        if (keyboard) kept.insert(*placed);
-        else if (x == placed->second.written) x = placed->second.base;
+        for (uint32_t text : legend.texts) {
+            auto placed = g_placed.find(text);
+            if (placed == g_placed.end()) continue;
+            float& x = G<float>(text + kMatrixTx);
+            if (keyboard) kept.insert(*placed);
+            else if (x == placed->second.written) x = placed->second.base;
+        }
     }
     g_placed = std::move(kept);
 }
 
 struct RowItem {
-    uint32_t clip;
-    float left;  // the text's, in the row's units with the legend where the movie put it
+    const LegendClip* legend;
+    float left;  // the text's, in the row's units with the text where it sat
     float width;
 };
 
 std::optional<RowItem> RowItemOf(X86Context& ctx, const LegendClip& legend) {
     auto share = g_label_share.find(legend.label);
-    if (share == g_label_share.end()) return std::nullopt;
-    auto placed = g_placed.find(legend.clip);
-    float x = G<float>(legend.clip + kMatrixTx);
-    float base = placed != g_placed.end() && placed->second.written == x ? placed->second.base : x;
-    Span field = SpanOf(ctx, legend.text);
+    if (share == g_label_share.end() || legend.texts.empty()) return std::nullopt;
+    uint32_t text = legend.texts.front();
+    Span field = SpanOf(ctx, text);
     float scale = G<float>(legend.clip + kClipMatrix);
-    return RowItem{legend.clip, base + field.left * scale, share->second * (field.right - field.left) * scale};
+    float left = G<float>(legend.clip + kMatrixTx) + (field.left - ShiftOf(text)) * scale;
+    return RowItem{&legend, left, share->second * (field.right - field.left) * scale};
 }
 
 // legends of one parent are spread so each longer label ends before the next begins; the row grows on both sides
@@ -331,7 +345,10 @@ void LayOutRow(X86Context& ctx, const std::vector<LegendClip>& row) {
         right = left + items[i].width;
     }
     float centre = shifts.back() / 2;
-    for (size_t i = 0; i < items.size(); i++) PlaceLegend(items[i].clip, shifts[i] - centre);
+    for (size_t i = 0; i < items.size(); i++) {
+        float scale = G<float>(items[i].legend->clip + kClipMatrix);  // the texts move in the legend's units
+        if (scale != 0) PlaceLegend(*items[i].legend, (shifts[i] - centre) / scale);
+    }
 }
 
 // a row is the legends of one parent on one line
