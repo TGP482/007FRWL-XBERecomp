@@ -6,6 +6,7 @@ title = 0x45410079
 entry = 0x318A6D
 xdk = 5849
 out = "generated/game"
+library = "007FRWL.dll"  # <exe>.dll, which the executable delay loads
 partitions = 128
 code_sections = [".text", "D3D", "XGRPH", "DSOUND", "D3DX", "XPP", ".idata"]
 
