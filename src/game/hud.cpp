@@ -1,6 +1,7 @@
 // 2D is laid out 640x480 and shown as wide as the output. Each widget the UI tree draws keeps its shape:
 // x' = x * narrow + anchor * spare width, anchored left, centre or right by where it sits on the screen.
-// The Flash menus and films stay 4:3 in the middle.
+// The Flash menus stay 4:3 in the middle, films fill the screen.
+#include <algorithm>
 #include <cmath>
 #include <mutex>
 #include <vector>
@@ -26,6 +27,8 @@ constexpr uint32_t kMeterWidth = 0x94;  // the whole bar, the fill is drawn insi
 
 // Im2D vertex: x, y, z, rhw, colour, u, v
 constexpr uint32_t kVertexStride = 0x1C;
+constexpr uint32_t kAxisX = 0x00;
+constexpr uint32_t kAxisY = 0x04;
 
 constexpr uint32_t kScreenWidth = 640;
 constexpr float kOff = -1;
@@ -35,6 +38,7 @@ constexpr float kRight = 1;
 constexpr float kMiddleBand = 0.125f;  // a widget this near the middle stays centred
 
 float g_anchor = kOff;
+bool g_film = false;  // the film's quad draws on a wider screen
 
 struct Span {
     float left;
@@ -64,6 +68,40 @@ bool DrawsToScreen() {
     return d3d::State().viewport.w == kScreenWidth;
 }
 
+struct Point {
+    float x;
+    float y;
+};
+
+// x' = x * narrow + anchor * spare width
+void AnchorPoints(uint32_t vertices, uint32_t count) {
+    float narrow = game::Narrow();
+    float offset = g_anchor * kScreenWidth * (1 - narrow);
+    for (uint32_t i = 0; i < count; i++) {
+        float& x = G<float>(vertices + i * kVertexStride);
+        x = x * narrow + offset;
+    }
+}
+
+// the film's corners scaled about their middle along one axis
+void ScaleFilm(uint32_t vertices, uint32_t count, uint32_t axis, float scale) {
+    float low = G<float>(vertices + axis);
+    float high = low;
+    for (uint32_t i = 1; i < count; i++) {
+        float value = G<float>(vertices + i * kVertexStride + axis);
+        low = std::min(low, value);
+        high = std::max(high, value);
+    }
+    float middle = (low + high) / 2;
+    for (uint32_t i = 0; i < count; i++) {
+        float& value = G<float>(vertices + i * kVertexStride + axis);
+        value = middle + (value - middle) * scale;
+    }
+}
+
+// The film covers the frame: made taller about the middle so a 4:3 film fills the screen, top and bottom cut
+void FitFilm(uint32_t vertices, uint32_t count) { ScaleFilm(vertices, count, kAxisY, 1 / game::Narrow()); }
+
 }  // namespace
 
 void HudAnchorLeft(bool on) { g_anchor = on && game::Wide() ? kLeft : kOff; }
@@ -88,10 +126,9 @@ void MenuDrawEnd(X86Context&, uint8_t*) { g_anchor = kOff; }
 // the film's quad over the frame, thiscall. Its own camera update, possibly inside the Flash render
 X86_EXTERN_FUNC(__imp__sub_00438370);
 X86_FUNC(sub_00438370) {
-    float outer = g_anchor;
-    if (game::Wide()) g_anchor = kCentre;
+    g_film = game::Wide();
     __imp__sub_00438370(ctx, base);
-    g_anchor = outer;
+    g_film = false;
 }
 
 // Im2DRenderPrimitive(type, vertices, count), cdecl. Moved for the call and put back after
@@ -99,16 +136,13 @@ X86_EXTERN_FUNC(__imp__sub_00278AB0);
 X86_FUNC(sub_00278AB0) {
     uint32_t vertices = R32(ctx.esp + 8);
     uint32_t count = R32(ctx.esp + 12);
-    if (g_anchor == kOff || !DrawsToScreen()) return __imp__sub_00278AB0(ctx, base);
-    static std::vector<float> saved;
+    bool moved = g_film || g_anchor != kOff;
+    if (!moved || !DrawsToScreen()) return __imp__sub_00278AB0(ctx, base);
+    static std::vector<Point> saved;
     saved.resize(count);
-    float narrow = game::Narrow();
-    float offset = g_anchor * kScreenWidth * (1 - narrow);
-    for (uint32_t i = 0; i < count; i++) {
-        float& x = G<float>(vertices + i * kVertexStride);
-        saved[i] = x;
-        x = x * narrow + offset;
-    }
+    for (uint32_t i = 0; i < count; i++) saved[i] = G<Point>(vertices + i * kVertexStride);
+    if (g_film) FitFilm(vertices, count);
+    else AnchorPoints(vertices, count);
     __imp__sub_00278AB0(ctx, base);
-    for (uint32_t i = 0; i < count; i++) G<float>(vertices + i * kVertexStride) = saved[i];
+    for (uint32_t i = 0; i < count; i++) G<Point>(vertices + i * kVertexStride) = saved[i];
 }
