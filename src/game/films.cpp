@@ -5,13 +5,18 @@
 #include "core/input.h"
 #include "xdk/hle.h"
 
-// Every film ends on A, Start, Enter, Space, Escape or the left mouse button, through the same path as its natural end
+// Every film ends on A, Start, Enter, Space, Escape or the left mouse button, through the same path as its natural end.
+// Looping menu backgrounds keep playing, as on the console: ending one only restarts it.
 
 namespace {
 
 // film player, the object at [0x77F954]
 constexpr uint32_t kFilmStopping = 0x22;   // byte, set by the film's stop 0x362B50; the update then ends the film
 constexpr uint32_t kFilmStartTime = 0x98;  // clock at the film's first frame, written at 0x362EFF
+
+// the play request the film came from, its "loop" attribute set by the flow and the menus' VideoPlay
+constexpr uint32_t kFilmRequest = 0x827000;
+constexpr uint32_t kRequestLoop = 0x28C;
 
 constexpr uint16_t kPadStart = 0x10;
 constexpr uint8_t kPadPressed = 0x20;  // analog button threshold
@@ -23,6 +28,11 @@ bool PadSkipDown() {
         if (a_down || (pad.buttons & kPadStart)) return true;
     }
     return false;
+}
+
+bool Looping() {
+    uint32_t request = kernel::R32(kFilmRequest);
+    return request && kernel::R32(request + kRequestLoop) == 1;
 }
 
 bool KeySkipDown() {
@@ -54,6 +64,7 @@ bool UpdateSkipPress(uint32_t film_start) {
 X86_EXTERN_FUNC(__imp__sub_00362C80);
 X86_FUNC(sub_00362C80) {
     uint32_t film_start = kernel::R32(ctx.ecx + kFilmStartTime);
-    if (UpdateSkipPress(film_start)) kernel::G<uint8_t>(ctx.ecx + kFilmStopping) = 1;
+    bool skip = UpdateSkipPress(film_start);
+    if (skip && !Looping()) kernel::G<uint8_t>(ctx.ecx + kFilmStopping) = 1;
     __imp__sub_00362C80(ctx, base);
 }
