@@ -2,10 +2,12 @@
 // codes; its script names the item clips. The cursor focuses the item under it through the screen's own
 // SetCurrentIndex, the left button presses the page's accept on the pad and the right button its cancel.
 #include <algorithm>
+#include <cctype>
 #include <chrono>
-#include <climits>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -69,12 +71,10 @@ constexpr uint32_t kItemFrameLabel = 2;
 // the world dossier's mission row: item i is the dot of mission kMissionDots[i]
 constexpr uint32_t kMissionDots[] = {0, 1, 2, 3, 14, 4, 15, 5, 6, 7, 8, 9, 10, 16, 11, 12, 13, 17};
 
-// item clips by the names the pages' scripts give them, the number between the two parts. A focused dossier tab
-// is swapped for its "on" clip. Numbers from a table or a first other than 0 come in the page's own order
+// item clips by the names the pages' scripts give them, the number between the two parts
 struct ItemName {
     const char* prefix;
     const char* suffix;
-    const char* focused = nullptr;
     uint32_t first = 0;
     std::span<const uint32_t> numbers = {};
 };
@@ -84,15 +84,23 @@ const ItemName kItemNames[] = {
     {"textmsg", "_mc"},
     {"item", ""},
     {"upgradeBox_mc", ""},
-    {"tab", "", "on", 1},
-    {"leveldot", "", nullptr, 0, kMissionDots},
+    {"leveldot", "", 0, kMissionDots},
     {"levelHolder", ""},
+    {"labelName", ""},
 };
 
 // The pause menu's tabs have no names: the page keeps one at each depth, blue or red as it is focused.
 // Its page is told apart by the clips beside them
 constexpr int kPauseTabDepths[] = {124, 85, 46, 7};
 constexpr const char* kPauseMarks[] = {"options_mc", "upgrades_mc", "border_mc"};
+// The dossier's tabs are named "tab1" to "tab4", the focused one "on", but its timeline gives some the wrong number.
+// Each keeps its row, so they are taken top to bottom
+constexpr const char* kTabPrefix = "tab";
+constexpr uint32_t kMatrixY = 5;
+// the focused item keeps the cursor until another is this much nearer its middle: items move as focus does
+constexpr float kStickiness = 0.25f;
+// an item this much larger than the page's usual item on both sides is a focus glow
+constexpr float kGlowScale = 1.5f;
 // the frame labels a page's script puts its focused item on
 constexpr const char* kFocusLabels[] = {"active", "default"};
 
@@ -116,10 +124,14 @@ struct Box {
     float bottom;
 };
 
+struct Extent {
+    float half_w;
+    float half_h;
+};
+
 // the item clips of a page in index order, as their names give it
 struct Items {
     std::vector<uint32_t> clips;
-    bool own;  // children of the page's own clip
 };
 
 enum class Order { Unknown, Forward, Reverse };
@@ -262,12 +274,10 @@ uint32_t NumberOf(const ItemName& name, uint32_t i) {
 
 uint32_t NamedItem(const std::vector<uint32_t>& children, const ItemName& name, uint32_t i) {
     std::string stem = name.prefix + std::to_string(NumberOf(name, i));
-    uint32_t clip = Named(children, (stem + name.suffix).c_str());
-    if (!clip && name.focused) clip = Named(children, (stem + name.focused).c_str());
-    return clip;
+    return Named(children, (stem + name.suffix).c_str());
 }
 
-std::optional<Items> NamedItems(const std::vector<uint32_t>& children, uint32_t count, bool own) {
+std::optional<Items> NamedItems(const std::vector<uint32_t>& children, uint32_t count) {
     for (const ItemName& name : kItemNames) {
         std::vector<uint32_t> clips;
         for (uint32_t i = 0; i < count; i++) {
@@ -275,8 +285,7 @@ std::optional<Items> NamedItems(const std::vector<uint32_t>& children, uint32_t 
             if (!clip) break;
             clips.push_back(clip);
         }
-        bool ordered = own || name.first || !name.numbers.empty();
-        if (clips.size() == count) return Items{clips, ordered};
+        if (clips.size() == count) return Items{clips};
     }
     return std::nullopt;
 }
@@ -294,7 +303,23 @@ std::optional<Items> PauseTabs(const std::vector<uint32_t>& children, uint32_t c
         if (at == children.end()) return std::nullopt;
         clips.push_back(*at);
     }
-    return Items{clips, true};
+    return Items{clips};
+}
+
+bool IsTab(const char* name) {
+    size_t prefix = strlen(kTabPrefix);
+    if (!name || strncmp(name, kTabPrefix, prefix) != 0 || !isdigit(uint8_t(name[prefix]))) return false;
+    const char* rest = name + prefix + 1;
+    return !*rest || strcmp(rest, "on") == 0;
+}
+
+std::optional<Items> DossierTabs(const std::vector<uint32_t>& children, uint32_t count) {
+    std::vector<uint32_t> clips;
+    std::copy_if(children.begin(), children.end(), std::back_inserter(clips), [](uint32_t c) { return IsTab(Name(c)); });
+    if (clips.size() != count) return std::nullopt;
+    auto row = [](uint32_t clip) { return (&G<float>(clip + kClipMatrix))[kMatrixY]; };
+    std::sort(clips.begin(), clips.end(), [&](uint32_t a, uint32_t b) { return row(a) < row(b); });
+    return Items{clips};
 }
 
 // the item clips a page has
@@ -312,11 +337,12 @@ std::optional<Items> FindItems(uint32_t screen) {
     if (count == 0 || count > kMaxItems || !Readable(path)) return std::nullopt;
     std::vector<uint32_t> parents{Resolve(Text(path))};
     if (auto tabs = PauseTabs(Children(parents.front()), count)) return tabs;
+    if (auto tabs = DossierTabs(Children(parents.front()), count)) return tabs;
     for (int depth = 0; depth < kSearchDepth && parents.front(); depth++) {
         std::vector<uint32_t> next;
         for (uint32_t parent : parents) {
             std::vector<uint32_t> children = Children(parent);
-            if (auto items = NamedItems(children, count, depth == 0)) return items;
+            if (auto items = NamedItems(children, count)) return items;
             next.insert(next.end(), children.begin(), children.end());
         }
         if (next.empty() || next.size() > kMaxSearch) break;
@@ -340,7 +366,7 @@ Order OrderOf(const std::vector<uint32_t>& clips, uint32_t focus) {
     return forward ? Order::Forward : Order::Reverse;
 }
 
-// the page's own items are taken in name order until their labels say otherwise; deeper ones need the labels
+// items are taken in name order until their labels say otherwise
 Order LatchOrder(uint32_t screen, const Items& items) {
     uint32_t script = R32(screen + kScreenScript);
     if (script != g_state.script) g_state.order = Order::Unknown;
@@ -348,7 +374,8 @@ Order LatchOrder(uint32_t screen, const Items& items) {
     Order order = OrderOf(items.clips, R32(screen + kScreenFocus));
     if (order != Order::Unknown) g_state.order = order;
     if (g_state.order != Order::Unknown) return g_state.order;
-    return items.own ? Order::Forward : Order::Unknown;
+    // forward until an item shows focus otherwise: a list may show none until its focus first moves
+    return Order::Forward;
 }
 
 Point Transform(uint32_t clip, Point point) {
@@ -379,16 +406,85 @@ std::optional<Box> StageBox(X86Context& ctx, uint32_t clip) {
     return stage;
 }
 
-// the item under the point, the one drawn on top where they overlap
-std::optional<uint32_t> ItemAt(X86Context& ctx, const std::vector<uint32_t>& clips, Point point) {
+// the point in the clip's own space, through every parent's matrix and its own undone
+Point ToLocal(uint32_t clip, Point stage) {
+    std::vector<uint32_t> chain;
+    for (uint32_t at = clip; at && chain.size() < size_t(kMaxParents); at = R32(at + kClipParent)) chain.push_back(at);
+    Point point = stage;
+    for (auto at = chain.rbegin(); at != chain.rend(); ++at) {
+        const float* m = &G<float>(*at + kClipMatrix);
+        float det = m[0] * m[3] - m[1] * m[2];
+        if (det == 0) return {NAN, NAN};
+        float x = point.x - m[4];
+        float y = point.y - m[5];
+        point = {(m[3] * x - m[2] * y) / det, (m[0] * y - m[1] * x) / det};
+    }
+    return point;
+}
+
+// the clip's box in its own space: its matrix is made identity for the measure
+Box LocalBox(X86Context& ctx, uint32_t clip) {
+    static const uint32_t out = mem::AllocSystem(sizeof(Box));
+    float* m = &G<float>(clip + kClipMatrix);
+    float saved[6];
+    std::copy(m, m + 6, saved);
+    const float identity[6] = {1, 0, 0, 1, 0, 0};
+    std::copy(identity, identity + 6, m);
+    ctx.ecx = clip;
+    CallGuest(ctx, kClipBox, {out});
+    std::copy(saved, saved + 6, m);
+    return G<Box>(out);
+}
+
+Extent ExtentOf(const Box& box) { return {(box.right - box.left) / 2, (box.bottom - box.top) / 2}; }
+
+float Median(std::vector<float> values) {
+    auto middle = values.begin() + (values.size() - 1) / 2;
+    std::nth_element(values.begin(), middle, values.end());
+    return *middle;
+}
+
+// the page's usual item size in the items' own space, each side's median
+Extent UsualExtent(X86Context& ctx, const std::vector<uint32_t>& clips) {
+    std::vector<float> widths;
+    std::vector<float> heights;
+    for (uint32_t clip : clips) {
+        Extent extent = ExtentOf(LocalBox(ctx, clip));
+        widths.push_back(extent.half_w);
+        heights.push_back(extent.half_h);
+    }
+    if (clips.empty()) return {};
+    return {Median(widths), Median(heights)};
+}
+
+// How far inside the item's own box the point is: 0 at its middle, 1 on its edge, none outside or hidden. A rotated
+// or scaled item is tested in its own space, so its box does not swell into its neighbours'. A focused item's glow
+// is left out: it is measured at the usual size around its middle
+std::optional<float> Nearness(X86Context& ctx, uint32_t clip, Point stage, Extent usual) {
+    if (!StageBox(ctx, clip)) return std::nullopt;
+    Box box = LocalBox(ctx, clip);
+    Point point = ToLocal(clip, stage);
+    Extent extent = ExtentOf(box);
+    Point middle = {box.left + extent.half_w, box.top + extent.half_h};
+    bool glow = extent.half_w > usual.half_w * kGlowScale && extent.half_h > usual.half_h * kGlowScale;
+    if (glow) extent = usual;
+    if (extent.half_w <= 0 || extent.half_h <= 0) return std::nullopt;
+    float dx = std::fabs(point.x - middle.x) / extent.half_w;
+    float dy = std::fabs(point.y - middle.y) / extent.half_h;
+    float edge = std::max(dx, dy);
+    if (!(edge <= 1)) return std::nullopt;
+    return edge;
+}
+
+// The item under the point nearest its own middle. Focused items are drawn on top, so the top one is not the one
+// meant
+std::optional<uint32_t> ItemAt(X86Context& ctx, const std::vector<uint32_t>& clips, Point point, Extent usual) {
     std::optional<uint32_t> hit;
-    int top = INT_MIN;
+    float best = 2;
     for (uint32_t i = 0; i < clips.size(); i++) {
-        std::optional<Box> box = StageBox(ctx, clips[i]);
-        bool inside = box && point.x >= box->left && point.x <= box->right && point.y >= box->top &&
-                      point.y <= box->bottom;
-        if (!inside || Depth(clips[i]) <= top) continue;
-        top = Depth(clips[i]);
+        std::optional<float> near = Nearness(ctx, clips[i], point, usual);
+        if (!near || *near >= best) continue;
+        best = *near;
         hit = i;
     }
     return hit;
@@ -427,12 +523,21 @@ void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
         return;
     }
     Order order = LatchOrder(screen, *items);
-    std::optional<uint32_t> hit = ItemAt(ctx, items->clips, stage);
-    if (order == Order::Unknown || !hit) return;
+    Extent usual = UsualExtent(ctx, items->clips);
+    std::optional<uint32_t> hit = ItemAt(ctx, items->clips, stage, usual);
+    if (!hit) return;
     uint32_t last = uint32_t(items->clips.size()) - 1;
-    uint32_t slot = order == Order::Reverse ? last - *hit : *hit;
     bool options = OptionsMenuStockRows(screen) > 0;
-    Focus(ctx, screen, options ? uint32_t(OptionsMenuIndexAt(int(slot))) : slot);
+    uint32_t focus = R32(screen + kScreenFocus);
+    uint32_t focused = order == Order::Reverse ? last - focus : focus;
+    if (!options && focused <= last && focused != *hit) {
+        std::optional<float> keep = Nearness(ctx, items->clips[focused], stage, usual);
+        std::optional<float> near = Nearness(ctx, items->clips[*hit], stage, usual);
+        if (keep && *keep < *near + kStickiness) hit = focused;
+    }
+    uint32_t slot = order == Order::Reverse ? last - *hit : *hit;
+    uint32_t index = options ? uint32_t(OptionsMenuIndexAt(int(slot))) : slot;
+    Focus(ctx, screen, index);
     if (edges.click) input::Press(accept);
 }
 
