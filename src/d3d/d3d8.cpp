@@ -14,6 +14,7 @@
 #include "core/diag.h"
 #include "d3d/gpu_frame.h"
 #include "d3d/occlusion.h"
+#include "d3d/pipeline_cache.h"
 #include "gpu/backend.h"
 #include "gpu/shaders.h"
 #include "gpu/texture.h"
@@ -500,6 +501,7 @@ HLE_STDCALL(D3DDevice_PersistDisplay, 0) {
     uint32_t data = mem::VirtualFromPhysical(R32(front + 4));
     if (g_backend) g_backend->Sync(data, bytes);
     kernel::SavePersistedDisplay(R32(front), R32(front + 0xC), size, HostPtr(data), bytes);
+    gpu::cache::Save();
     LOGI("d3d: PersistDisplay, %u bytes", bytes);
     return 0;
 }
