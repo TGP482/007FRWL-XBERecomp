@@ -1,7 +1,7 @@
 // 2D is laid out 640x480 and shown as wide as the output. Each widget the UI tree draws keeps its shape:
 // x' = x * narrow + anchor * spare width, anchored left, centre or right by where it sits on the screen.
-// The Flash menus stay 4:3 in the middle, black beside a backdrop that reaches the 4:3 sides; films fill the screen or
-// stay 4:3 as set; a menu's film stays stretched.
+// The Flash menus stay 4:3 in the middle, black beside a backdrop that reaches the 4:3 sides; films fill the screen up to
+// their letterbox or stay 4:3 as set; a menu's film stays 4:3.
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -54,12 +54,21 @@ constexpr uint32_t kFmvFill = 0;  // fmv_scale
 // film quad: +0x20 the film's width in pixels. The front end's loops are 512x448, every other film 640x480
 constexpr uint32_t kQuadFilmWidth = 0x20;
 constexpr float kMenuFilmWidth = 512;
-constexpr float kWidest = 16.0f / 9.0f;  // a menu's film is stretched no wider
+
+// letterbox bar of each letterboxed film, in film rows top and bottom alike, measured from the disc's films
+struct Letterbox {
+    const char* name;
+    float bar;
+};
+constexpr Letterbox kLetterboxes[] = {{"intro_", 62}, {"title_", 58}, {"attract_", 56}};
+constexpr float kFilmHeight = 480;
+constexpr float kFilmEdge = 24;  // rows the quad leaves off top and bottom, 0x438100
 
 enum class Film { None, Shown, Menu };
 
 float g_anchor = kOff;
 Film g_film = Film::None;  // the film's quad draws on a wider screen
+float g_letterbox = 0;     // share of the shown film height that is letterbox
 bool g_menu = false;       // inside the Flash render
 bool g_bar = false;        // a side bar is being drawn
 
@@ -130,18 +139,20 @@ void ScaleFilm(uint32_t vertices, uint32_t count, uint32_t axis, float scale) {
     }
 }
 
-// The film covers the frame, shown as wide as the output. A menu's film stays stretched, no wider than 16:9.
-// Filled, a film is made taller about the middle so it fills the screen, top and bottom cut; else narrowed to 4:3
+void LatchLetterbox(const char* file) {
+    g_letterbox = 0;
+    for (const Letterbox& film : kLetterboxes) {
+        if (std::strstr(file, film.name)) g_letterbox = 2 * (film.bar - kFilmEdge) / (kFilmHeight - 2 * kFilmEdge);
+    }
+}
+
+// The film covers the frame, shown as wide as the output, and is narrowed to 4:3. Filled, it is zoomed about the middle
+// until only its letterbox is cut or it fills the width. A menu's film stays 4:3
 void FitFilm(uint32_t vertices, uint32_t count) {
-    if (g_film == Film::Menu) {
-        ScaleFilm(vertices, count, kAxisX, std::min(1.0f, kWidest / game::Aspect()));
-        return;
-    }
-    if (game::Opt().fmv_scale == kFmvFill) {
-        ScaleFilm(vertices, count, kAxisY, 1 / game::Narrow());
-        return;
-    }
-    ScaleFilm(vertices, count, kAxisX, game::Narrow());
+    bool fill = g_film == Film::Shown && game::Opt().fmv_scale == kFmvFill;
+    float zoom = fill ? std::min(1 / game::Narrow(), 1 / (1 - g_letterbox)) : 1;
+    ScaleFilm(vertices, count, kAxisY, zoom);
+    ScaleFilm(vertices, count, kAxisX, zoom * game::Narrow());
 }
 
 // A menu shape touching a 4:3 side, the backdrop, is drawn again black over the spare width that side: points on
@@ -204,6 +215,13 @@ void MenuDrawBegin(X86Context&, uint8_t*) {
 void MenuDrawEnd(X86Context&, uint8_t*) {
     g_anchor = kOff;
     g_menu = false;
+}
+
+// film open, thiscall on the film player with the play request by value, its file name first
+X86_EXTERN_FUNC(__imp__sub_003626D0);
+X86_FUNC(sub_003626D0) {
+    LatchLetterbox(static_cast<const char*>(HostPtr(ctx.esp + 4)));
+    __imp__sub_003626D0(ctx, base);
 }
 
 // the film's quad over the frame, thiscall. Its own camera update, possibly inside the Flash render
