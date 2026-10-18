@@ -1,12 +1,13 @@
 // 2D is laid out 640x480 and shown as wide as the output. Each widget the UI tree draws keeps its shape:
 // x' = x * narrow + anchor * spare width, anchored left, centre or right by where it sits on the screen.
-// The Flash menus stay 4:3 in the middle, films fill the screen.
+// The Flash menus stay 4:3 in the middle, films fill the screen or stay 4:3 as set; a menu's film stays stretched.
 #include <algorithm>
 #include <cmath>
 #include <mutex>
 #include <vector>
 
 #include "common/aspect.h"
+#include "common/options.h"
 #include "game/hud.h"
 #include "xdk/d3d8.h"
 #include "xdk/hle.h"
@@ -37,8 +38,17 @@ constexpr float kCentre = 0.5f;
 constexpr float kRight = 1;
 constexpr float kMiddleBand = 0.125f;  // a widget this near the middle stays centred
 
+constexpr uint32_t kFmvFill = 0;  // fmv_scale
+
+// film quad: +0x20 the film's width in pixels. The front end's loops are 512x448, every other film 640x480
+constexpr uint32_t kQuadFilmWidth = 0x20;
+constexpr float kMenuFilmWidth = 512;
+constexpr float kWidest = 16.0f / 9.0f;  // a menu's film is stretched no wider
+
+enum class Film { None, Shown, Menu };
+
 float g_anchor = kOff;
-bool g_film = false;  // the film's quad draws on a wider screen
+Film g_film = Film::None;  // the film's quad draws on a wider screen
 
 struct Span {
     float left;
@@ -99,8 +109,19 @@ void ScaleFilm(uint32_t vertices, uint32_t count, uint32_t axis, float scale) {
     }
 }
 
-// The film covers the frame: made taller about the middle so a 4:3 film fills the screen, top and bottom cut
-void FitFilm(uint32_t vertices, uint32_t count) { ScaleFilm(vertices, count, kAxisY, 1 / game::Narrow()); }
+// The film covers the frame, shown as wide as the output. A menu's film stays stretched, no wider than 16:9.
+// Filled, a film is made taller about the middle so it fills the screen, top and bottom cut; else narrowed to 4:3
+void FitFilm(uint32_t vertices, uint32_t count) {
+    if (g_film == Film::Menu) {
+        ScaleFilm(vertices, count, kAxisX, std::min(1.0f, kWidest / game::Aspect()));
+        return;
+    }
+    if (game::Opt().fmv_scale == kFmvFill) {
+        ScaleFilm(vertices, count, kAxisY, 1 / game::Narrow());
+        return;
+    }
+    ScaleFilm(vertices, count, kAxisX, game::Narrow());
+}
 
 }  // namespace
 
@@ -126,9 +147,10 @@ void MenuDrawEnd(X86Context&, uint8_t*) { g_anchor = kOff; }
 // the film's quad over the frame, thiscall. Its own camera update, possibly inside the Flash render
 X86_EXTERN_FUNC(__imp__sub_00438370);
 X86_FUNC(sub_00438370) {
-    g_film = game::Wide();
+    bool menu = G<float>(ctx.ecx + kQuadFilmWidth) == kMenuFilmWidth;
+    if (game::Wide()) g_film = menu ? Film::Menu : Film::Shown;
     __imp__sub_00438370(ctx, base);
-    g_film = false;
+    g_film = Film::None;
 }
 
 // Im2DRenderPrimitive(type, vertices, count), cdecl. Moved for the call and put back after
@@ -136,12 +158,12 @@ X86_EXTERN_FUNC(__imp__sub_00278AB0);
 X86_FUNC(sub_00278AB0) {
     uint32_t vertices = R32(ctx.esp + 8);
     uint32_t count = R32(ctx.esp + 12);
-    bool moved = g_film || g_anchor != kOff;
+    bool moved = g_film != Film::None || g_anchor != kOff;
     if (!moved || !DrawsToScreen()) return __imp__sub_00278AB0(ctx, base);
     static std::vector<Point> saved;
     saved.resize(count);
     for (uint32_t i = 0; i < count; i++) saved[i] = G<Point>(vertices + i * kVertexStride);
-    if (g_film) FitFilm(vertices, count);
+    if (g_film != Film::None) FitFilm(vertices, count);
     else AnchorPoints(vertices, count);
     __imp__sub_00278AB0(ctx, base);
     for (uint32_t i = 0; i < count; i++) G<Point>(vertices + i * kVertexStride) = saved[i];

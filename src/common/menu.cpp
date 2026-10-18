@@ -91,6 +91,8 @@ constexpr uint32_t kMsaaValues[] = {0, 2, 4, 8};
 const char* const kMsaaNames[] = {"OFF", "2x", "4x", "8x"};
 constexpr uint32_t kAoValues[] = {0, 1, 2};
 const char* const kAoNames[] = {"OFF", "SSAO", "GTAO"};
+constexpr uint32_t kFmvScales[] = {0, 1};
+const char* const kFmvScaleNames[] = {"FILL", "4:3"};
 constexpr uint32_t kAudioOutputs[] = {audio::kOutputAuto, audio::kOutputMono, audio::kOutputStereo,
                                       audio::kOutputSurround};
 const char* const kAudioOutputNames[] = {"AUTOMATIC", "MONO", "2.0 STEREO", "5.1 SURROUND"};
@@ -255,6 +257,10 @@ std::string StepFpsCounter(Settings&, int step) {
     return OnOff(on);
 }
 
+std::string StepFmvScale(Settings&, int step) {
+    return kFmvScaleNames[StepTable(kFmvScales, game::Opt().fmv_scale, step)];
+}
+
 std::string StepAniso(Settings& s, int step) { return kAnisoNames[StepTable(kAnisoValues, s.aniso, step)]; }
 
 std::string StepMsaa(Settings&, int step) { return kMsaaNames[StepTable(kMsaaValues, game::Opt().msaa, step)]; }
@@ -347,6 +353,7 @@ enum RowId {
     kMsaaRow,
     kSmaaRow,
     kFieldOfViewRow,
+    kFmvScaleRow,
 };
 
 // in RowId order
@@ -368,6 +375,7 @@ constexpr StepFn kSteps[] = {
     StepMsaa,
     StepSmaa,
     StepFieldOfView,
+    StepFmvScale,
 };
 
 bool Held(int id) { return id == kDisplayModeRow || id == kResolutionRow; }
@@ -388,6 +396,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kHdrOutputRow, "HDR OUTPUT"},
     {Kind::Value, kMaxFpsRow, "MAX FRAME RATE"},
     {Kind::Value, kFpsCounterRow, "FPS COUNTER"},
+    {Kind::Value, kFmvScaleRow, "FMV SCALE"},
     {Kind::Heading, -1, "GRAPHICS"},
     {Kind::Value, kMsaaRow, "MSAA"},
     {Kind::Value, kSmaaRow, "SMAA"},
@@ -646,6 +655,7 @@ void RestoreDefaults(int page) {
         game::Opt().skip_intros = defaults.skip_intros;
         game::Opt().fps_counter = defaults.fps_counter;
         game::Opt().hdr_output = defaults.hdr_output;
+        game::Opt().fmv_scale = defaults.fmv_scale;
         game::Opt().audio_output = defaults.audio_output;
         game::Opt().msaa = defaults.msaa;
         game::Opt().smaa = defaults.smaa;
