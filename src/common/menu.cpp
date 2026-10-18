@@ -2,12 +2,14 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -90,7 +92,7 @@ const char* const kAoNames[] = {"OFF", "SSAO", "GTAO"};
 constexpr uint32_t kAudioOutputs[] = {audio::kOutputAuto, audio::kOutputMono, audio::kOutputStereo,
                                       audio::kOutputSurround};
 const char* const kAudioOutputNames[] = {"AUTOMATIC", "MONO", "2.0 STEREO", "5.1 SURROUND"};
-constexpr uint32_t kFpsCaps[] = {30, 60, 75, 90, 120, 144, 165, 240, 360, 0};
+constexpr uint32_t kFpsCaps[] = {30, 60, 75, 90, 120, 144, 165, 240, 360, kFpsCapRefresh, 0};
 const char* const kDisplayModeNames[] = {"FULLSCREEN", "BORDERLESS", "WINDOWED"};
 constexpr int kDisplayModeCount = int(std::size(kDisplayModeNames));
 
@@ -240,7 +242,9 @@ std::string StepHdrOutput(Settings&, int step) {
 
 std::string StepMaxFps(Settings& s, int step) {
     uint32_t cap = kFpsCaps[StepTable(kFpsCaps, s.fps_cap, step)];
-    return cap ? std::to_string(cap) : "UNLIMITED";
+    if (cap == kFpsCapRefresh) return "REFRESH RATE";
+    if (cap == 0) return "UNLIMITED";
+    return std::to_string(cap);
 }
 
 std::string StepFpsCounter(Settings&, int step) {
@@ -725,7 +729,52 @@ void DrawPanel() {
     ImGui::End();
 }
 
+// the game window's monitor's refresh rate, read again each second (a mode change, a move to another monitor); 0
+// when unreadable
+uint32_t RefreshRate() {
+    static uint32_t rate = 0;
+    static ULONGLONG next = 0;
+    ULONGLONG now = GetTickCount64();
+    if (now < next) return rate;
+    next = now + 1000;
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    HMONITOR monitor = MonitorFromWindow(static_cast<HWND>(Window()), MONITOR_DEFAULTTOPRIMARY);
+    bool read = GetMonitorInfoW(monitor, &mi) && EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &mode);
+    rate = read && mode.dmDisplayFrequency > 1 ? mode.dmDisplayFrequency : 0;
+    return rate;
+}
+
+// as app::Pace, at this cap
+void PaceAt(uint32_t cap) {
+    using clock = std::chrono::steady_clock;
+    static clock::time_point next = clock::now();
+    auto now = clock::now();
+    if (!cap) {
+        next = now;
+        return;
+    }
+    auto period = std::chrono::nanoseconds(1000000000ull / cap);
+    next += period;
+    if (next < now - period) next = now;
+    while (clock::now() + std::chrono::milliseconds(2) < next) Sleep(1);
+    while (clock::now() < next) std::this_thread::yield();
+}
+
 }  // namespace
+
+void PaceFrame() {
+    if (Get().fps_cap != kFpsCapRefresh) {
+        Pace();
+        return;
+    }
+    // a few under, so a variable refresh display stays in its range and vsync never waits a whole refresh
+    constexpr uint32_t kRefreshMargin = 3;
+    uint32_t rate = RefreshRate();
+    PaceAt(rate > kRefreshMargin ? rate - kRefreshMargin : 0);
+}
 
 const rows::Row* rows::Page(int page, size_t* count) {
     if (page == 0) {

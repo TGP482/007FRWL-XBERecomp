@@ -9,6 +9,7 @@
 #include <unordered_set>
 
 #include "app/app.h"
+#include "common/menu.h"
 #include "core/diag.h"
 #include "d3d/occlusion.h"
 #include "gpu/backend.h"
@@ -570,7 +571,7 @@ HLE_STDCALL(D3DDevice_Swap, 1) {
         }
     }
     if (g_backend) g_backend->Present(SurfaceOf(g_buffers[1]));
-    app::Pace();
+    app::PaceFrame();
     // like the XDK, the surfaces stay put and their memory rotates: titles keep back buffer pointers and copy its data
     uint32_t last = g_buffers[g_buffer_count - 1], data = R32(last + 4), lk = R32(last + 8);
     for (uint32_t i = g_buffer_count - 1; i > 0; i--) {
