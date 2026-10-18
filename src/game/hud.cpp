@@ -1,8 +1,10 @@
 // 2D is laid out 640x480 and shown as wide as the output. Each widget the UI tree draws keeps its shape:
 // x' = x * narrow + anchor * spare width, anchored left, centre or right by where it sits on the screen.
-// The Flash menus stay 4:3 in the middle, films fill the screen or stay 4:3 as set; a menu's film stays stretched.
+// The Flash menus stay 4:3 in the middle, black beside a backdrop that reaches the 4:3 sides; films fill the screen or
+// stay 4:3 as set; a menu's film stays stretched.
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <mutex>
 #include <vector>
 
@@ -25,6 +27,7 @@ constexpr uint32_t kImageScale = 0x4C;
 constexpr uint32_t kImagePivotX = 0x50;  // share of the width left of the position
 constexpr uint32_t kMeterDraw = 0x399B20;
 constexpr uint32_t kMeterWidth = 0x94;  // the whole bar, the fill is drawn inside it
+constexpr uint32_t kBarDraw = 0x359080;  // a bar filled to a share, drawn from its position across its width
 
 constexpr uint32_t kDrawArgBytes = 4;  // a widget's Draw is thiscall (screen position), ret 4
 
@@ -32,6 +35,12 @@ constexpr uint32_t kDrawArgBytes = 4;  // a widget's Draw is thiscall (screen po
 constexpr uint32_t kVertexStride = 0x1C;
 constexpr uint32_t kAxisX = 0x00;
 constexpr uint32_t kAxisY = 0x04;
+constexpr uint32_t kVertexColour = 0x10;  // ARGB
+constexpr uint32_t kAlphaMask = 0xFF000000;
+
+// Im2DRenderPrimitive(type, vertices, count)
+constexpr uint32_t kIm2DRenderPrimitive = 0x278AB0;
+constexpr uint32_t kMaxBarVertices = 256;
 
 constexpr uint32_t kScreenWidth = 640;
 constexpr float kOff = -1;
@@ -51,6 +60,8 @@ enum class Film { None, Shown, Menu };
 
 float g_anchor = kOff;
 Film g_film = Film::None;  // the film's quad draws on a wider screen
+bool g_menu = false;       // inside the Flash render
+bool g_bar = false;        // a side bar is being drawn
 
 struct Span {
     float left;
@@ -61,6 +72,7 @@ struct Span {
 Span WidgetSpan(uint32_t widget, float x) {
     uint32_t draw = R32(R32(widget + kWidgetVtable) + kVtableDraw);
     if (draw == kMeterDraw) return {x, x + G<float>(widget + kMeterWidth)};
+    if (draw == kBarDraw) return {x, x + G<float>(widget + kImageWidth) * G<float>(widget + kImageScale)};
     if (draw != kImageDraw) return {x, x};
     float width = G<float>(widget + kImageWidth) * G<float>(widget + kImageScale);
     float left = x - G<float>(widget + kImagePivotX) * width;
@@ -86,6 +98,11 @@ struct Point {
     float x;
     float y;
 };
+
+bool OnEdge(float x, float edge) {
+    constexpr float kSlack = 0.5f;
+    return std::fabs(x - edge) < kSlack;
+}
 
 // x' = x * narrow + anchor * spare width
 void AnchorPoints(uint32_t vertices, uint32_t count) {
@@ -127,6 +144,33 @@ void FitFilm(uint32_t vertices, uint32_t count) {
     ScaleFilm(vertices, count, kAxisX, game::Narrow());
 }
 
+// A menu shape touching a 4:3 side, the backdrop, is drawn again black over the spare width that side: points on
+// the edge go to the screen's side, the rest to the 4:3 side. Its alpha is kept, so a fade darkens the bar too
+void DrawSideBar(X86Context& ctx, uint32_t type, uint32_t vertices, uint32_t count, float edge) {
+    static const uint32_t bar = mem::AllocSystem(kMaxBarVertices * kVertexStride);
+    bool touches = false;
+    for (uint32_t i = 0; i < count; i++) touches |= OnEdge(G<float>(vertices + i * kVertexStride), edge);
+    if (!touches || count > kMaxBarVertices) return;
+    float spare = kScreenWidth * (1 - game::Narrow()) / 2;
+    float inner = edge == 0 ? spare : kScreenWidth - spare;
+    float outer = edge == 0 ? 0 : kScreenWidth;
+    std::memcpy(HostPtr(bar), HostPtr(vertices), count * kVertexStride);
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t vertex = bar + i * kVertexStride;
+        float& x = G<float>(vertex + kAxisX);
+        x = OnEdge(x, edge) ? outer : inner;
+        W32(vertex + kVertexColour, R32(vertex + kVertexColour) & kAlphaMask);
+    }
+    g_bar = true;
+    CallGuest(ctx, kIm2DRenderPrimitive, {type, bar, count});
+    g_bar = false;
+}
+
+void DrawSideBars(X86Context& ctx, uint32_t type, uint32_t vertices, uint32_t count) {
+    DrawSideBar(ctx, type, vertices, count, 0);
+    DrawSideBar(ctx, type, vertices, count, float(kScreenWidth));
+}
+
 }  // namespace
 
 void HudAnchorLeft(bool on) { g_anchor = on && game::Wide() ? kLeft : kOff; }
@@ -152,10 +196,15 @@ bool HudWidgetShown(X86Context& ctx, uint8_t*) {
 
 // around the Flash player's render, 0x412F1F
 void MenuDrawBegin(X86Context&, uint8_t*) {
-    if (game::Wide()) g_anchor = kCentre;
+    if (!game::Wide()) return;
+    g_anchor = kCentre;
+    g_menu = true;
 }
 
-void MenuDrawEnd(X86Context&, uint8_t*) { g_anchor = kOff; }
+void MenuDrawEnd(X86Context&, uint8_t*) {
+    g_anchor = kOff;
+    g_menu = false;
+}
 
 // the film's quad over the frame, thiscall. Its own camera update, possibly inside the Flash render
 X86_EXTERN_FUNC(__imp__sub_00438370);
@@ -169,10 +218,12 @@ X86_FUNC(sub_00438370) {
 // Im2DRenderPrimitive(type, vertices, count), cdecl. Moved for the call and put back after
 X86_EXTERN_FUNC(__imp__sub_00278AB0);
 X86_FUNC(sub_00278AB0) {
+    uint32_t type = R32(ctx.esp + 4);
     uint32_t vertices = R32(ctx.esp + 8);
     uint32_t count = R32(ctx.esp + 12);
     bool moved = g_film != Film::None || g_anchor != kOff;
-    if (!moved || !DrawsToScreen()) return __imp__sub_00278AB0(ctx, base);
+    if (g_bar || !moved || !DrawsToScreen()) return __imp__sub_00278AB0(ctx, base);
+    if (g_menu && g_film == Film::None) DrawSideBars(ctx, type, vertices, count);
     static std::vector<Point> saved;
     saved.resize(count);
     for (uint32_t i = 0; i < count; i++) saved[i] = G<Point>(vertices + i * kVertexStride);
