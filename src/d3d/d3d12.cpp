@@ -788,6 +788,7 @@ public:
     void RecordLate(uint32_t data) override;
     void Flush() override;
     void SetGamma(const uint8_t* ramp) override;
+    void WaitGpuFrame(uint64_t n);
 
     ID3D12Device* Device() override { return dev_.Get(); }
     ID3D12GraphicsCommandList* List() override { return cl_.Get(); }
@@ -1134,6 +1135,7 @@ private:
     std::unordered_map<uint32_t, Late> late_;
     std::mutex late_lock_;                      // DeliverLate runs on the title's thread
     std::atomic<uint64_t> presents_seen_{0};    // presents_ for DeliverLate
+    std::atomic<uint64_t> present_fence_[kFrames + 1] = {};  // by presents_, for WaitGpuFrame
     Assembled asm_;  // kept between draws for its buffers
     bool tearing_ = false;
     // HDR10 output: the window's display, the output asked and in use, the frame and panel targets it draws first
@@ -3891,6 +3893,7 @@ void D3D12Backend::Present(const Surface& front) {
     uint32_t bi = swap_->GetCurrentBackBufferIndex();
     DrawFrame(t, bi);
     Submit(false);
+    present_fence_[presents_ % (kFrames + 1)].store(fence_value_);
     bool vsync = app::Get().vsync;
     auto perf_swap = PerfClock::now();
     swap_->Present(vsync ? 1 : 0, !vsync && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
@@ -4214,8 +4217,24 @@ void D3D12Backend::SetGamma(const uint8_t* ramp) {
     ramp_dirty_ = true;
 }
 
+// the slot is not reused before the caller's wait: the title runs at most one present ahead
+void D3D12Backend::WaitGpuFrame(uint64_t n) {
+    uint64_t fence = present_fence_[n % (kFrames + 1)].load();
+    if (fence > fence_->GetCompletedValue()) fence_->SetEventOnCompletion(fence, nullptr);
+}
+
+D3D12Backend* g_d3d12 = nullptr;
+
 }  // namespace
 
-std::unique_ptr<Backend> CreateBackend() { return std::make_unique<D3D12Backend>(); }
+std::unique_ptr<Backend> CreateBackend() {
+    auto backend = std::make_unique<D3D12Backend>();
+    g_d3d12 = backend.get();
+    return backend;
+}
+
+void WaitGpuFrame(uint64_t n) {
+    if (g_d3d12) g_d3d12->WaitGpuFrame(n);
+}
 
 }  // namespace gpu
