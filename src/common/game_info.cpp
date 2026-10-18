@@ -13,6 +13,7 @@
 #include "app/app.h"
 #include "audio/output.h"
 #include "common/menu.h"
+#include "common/monitor.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
 #include "common/saves.h"
@@ -25,6 +26,7 @@ namespace {
 constexpr intptr_t kKeyWasDown = 1 << 30;  // bit 30 of a key message's lparam: a repeat
 constexpr int kArrowCursorId = 32512;      // the system arrow
 constexpr uintptr_t kSysCommandMask = 0xFFF0;  // the low bits of a WM_SYSCOMMAND code are the system's
+constexpr uint32_t kHostApplyDisplay = WM_APP + 1;  // main.cpp's kApplyDisplay
 
 bool Take(intptr_t* result) {
     *result = 0;
@@ -67,8 +69,15 @@ bool ClientCursor(intptr_t lp, intptr_t* result) {
 }
 
 // F3 and the display mode stay with the host
-bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result) {
+bool Message(void* hwnd, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result) {
     switch (msg) {
+        case WM_CREATE:
+            UpdateSplashMonitor();
+            UpdateWindowMonitor(hwnd);
+            return false;
+        case kHostApplyDisplay:
+            UpdateWindowMonitor(hwnd);
+            return false;
         case WM_ACTIVATE:
             if (LOWORD(wp) == WA_INACTIVE) input::ReleaseCursor();
             return false;
@@ -110,6 +119,7 @@ void Load(const void* table) {
     Options& options = Opt();
     float sensitivity = float(settings["mouse_sensitivity"].value_or(double(options.mouse_sensitivity)));
     if (std::isfinite(sensitivity)) options.mouse_sensitivity = sensitivity;
+    options.monitor = settings["monitor"].value_or(options.monitor);
     const toml::table* keys = settings["keys"].as_table();
     if (!keys) return;
     for (auto&& [id, value] : *keys) {
@@ -119,6 +129,7 @@ void Load(const void* table) {
 
 void Save(void* table) {
     toml::table& settings = *static_cast<toml::table*>(table);
+    settings.insert("monitor", Opt().monitor);
     // thousandths, so the file reads 0.3 and not 0.30000001192092896
     settings.insert("mouse_sensitivity", std::round(double(Opt().mouse_sensitivity) * 1000.0) / 1000.0);
     toml::table keys;
@@ -164,6 +175,7 @@ const app::GameInfo app::kGame = {
         {"fov", nullptr, &game::Opt().fov},
         {"fmv_scale", nullptr, &game::Opt().fmv_scale},
         {"walk_speed", nullptr, &game::Opt().walk_speed},
+        {"pause_on_focus_loss", &game::Opt().pause_on_focus_loss, nullptr},
     },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it

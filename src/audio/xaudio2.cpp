@@ -34,6 +34,7 @@ std::atomic<bool> g_surround{false};
 std::atomic<bool> g_mono{false};
 std::atomic<uint32_t> g_mode{kOutputAuto};
 std::atomic<bool> g_mode_changed{false};
+std::atomic<bool> g_paused{false};
 
 struct Output {
     IXAudio2* xa = nullptr;
@@ -160,8 +161,21 @@ void Pump(Output& out, const std::function<void(float*, uint32_t)>& render) {
     constexpr uint32_t kFrames = kRate / 100;
     constexpr uint32_t kSlots = 4;
     std::vector<float> bufs(kSlots * kFrames * kChannels);
+    bool stopped = false;
     for (uint32_t n = 0;;) {
         if (g_mode_changed.exchange(false)) ApplyMatrix(out);
+        if (g_paused != stopped) {
+            stopped = !stopped;
+            if (stopped) {
+                out.voice->Stop();
+            } else {
+                out.voice->Start();
+            }
+        }
+        if (stopped) {
+            Sleep(10);
+            continue;
+        }
         XAUDIO2_VOICE_STATE st;
         out.voice->GetState(&st, XAUDIO2_VOICE_NOSAMPLESPLAYED);
         if (st.BuffersQueued >= 3) {
@@ -187,6 +201,8 @@ bool IsMono() { return g_mono; }
 void SetOutputMode(uint32_t mode) {
     if (g_mode.exchange(mode) != mode) g_mode_changed = true;
 }
+
+void SetPaused(bool paused) { g_paused = paused; }
 
 void StartOutput(std::function<void(float*, uint32_t)> render) {
     std::promise<void> opened;

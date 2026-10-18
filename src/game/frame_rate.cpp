@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 
+#include "common/options.h"
 #include "xdk/hle.h"
 
 // Frame rate unlock: the game's own frame limiter goes and its clock follows real time.
@@ -46,9 +47,11 @@ struct Clock {
 };
 Clock g_clock;
 
+// focus pauses are no time
 double NowMs() {
     using namespace std::chrono;
-    return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
+    double now = duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
+    return now - double(game::FocusPausedMs());
 }
 
 // real milliseconds since the last event, none on the first

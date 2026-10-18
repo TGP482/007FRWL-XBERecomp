@@ -10,6 +10,7 @@
 
 #include "app/app.h"
 #include "common/menu.h"
+#include "common/options.h"
 #include "core/diag.h"
 #include "d3d/gpu_frame.h"
 #include "d3d/occlusion.h"
@@ -550,6 +551,7 @@ uint64_t g_backend_presents = 0;
 }  // namespace
 
 HLE_STDCALL(D3DDevice_Swap, 1) {
+    game::WaitWhileUnfocused();
     app::SplashFirstFrame();
     // handed over from the previous instance: the window opens on the second frame, the first picture with
     // anything drawn over it right after

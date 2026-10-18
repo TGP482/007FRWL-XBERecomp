@@ -23,6 +23,8 @@ struct Options {
     uint32_t fov = 65;  // horizontal degrees on a 4:3 frame, 65 is the game's
     uint32_t fmv_scale = 0;  // 4:3 films on a wider screen: 0 fill it, top and bottom cut; 1 kept 4:3
     uint32_t walk_speed = 50;  // percent of a full stick the walk key moves at
+    std::string monitor;  // its device name, \\.\DISPLAY2; empty the primary
+    bool pause_on_focus_loss = true;  // the game and its sound stop while the window is in the background
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };
 Options& Opt();
@@ -30,5 +32,9 @@ const char* ShownLanguage();  // language.cpp
 inline std::atomic<float> g_fps{0};  // from the host, for the game's own counter
 inline std::atomic<bool> g_hdr_display{false};  // the window's display has Windows HDR on, from the renderer
 inline std::atomic<bool> g_hide_hud{false};  // the toggle HUD key: the HUD is not drawn
+inline std::atomic<bool> g_focus_paused{false};  // the game thread waits for the window's focus
+void WaitWhileUnfocused();  // focus_pause.cpp: game thread, before the present
+uint32_t FocusPausedMs();  // the milliseconds the game thread has waited in focus pauses so far
+bool OnGameThread();  // the calling thread is the one that waits in focus pauses
 
 }  // namespace game

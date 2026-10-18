@@ -16,7 +16,8 @@
             "condition": {"type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows"}
         },
         {"name": "debug", "displayName": "Debug", "inherits": "base",
-         "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug"}},
+         "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "CMAKE_C_FLAGS_DEBUG": "-O3", "CMAKE_CXX_FLAGS_DEBUG": "-O3",
+                            "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL"}},
         {"name": "release", "displayName": "Release", "inherits": "base",
          "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}},
         {"name": "relwithdebinfo", "displayName": "RelWithDebInfo", "inherits": "base",
