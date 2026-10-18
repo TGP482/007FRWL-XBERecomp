@@ -723,6 +723,14 @@ struct PsoKey {
     uint32_t ao_mark;  // the stencil holds ambient occlusion's mark, not the game's state
 };
 
+// a pipeline as the key file keeps it: the key and its shaders' source checks, which find their bytecode on disk
+struct WarmKey {
+    PsoKey key;
+    uint64_t vs_check;
+    uint64_t ps_check;
+};
+static_assert(sizeof(WarmKey) == sizeof(PsoKey) + 16);
+
 // Blit's settings past the source and its rectangle
 struct BlitOptions {
     bool gamma = false;       // through the gamma lookup
@@ -910,6 +918,8 @@ private:
     ID3D12PipelineState* EnsurePipeline(const PsoKey& k, bool wait);
     void TakeBuilt();
     void DeliverBuilt(uint64_t h, ComPtr<ID3D12PipelineState> pso);
+    void RememberPipeline(const PsoKey& k);
+    void WarmPipelines();
     ComPtr<ID3D12PipelineState> CreatePipeline(const PsoKey& k, uint64_t h, ID3DBlob* vs, ID3DBlob* ps, bool compile,
                                                bool& pending);
     ComPtr<ID3D12PipelineState> BuildPipeline(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& d, uint64_t key);
@@ -1228,6 +1238,7 @@ bool D3D12Backend::Init(uint32_t width, uint32_t height) {
     ImGui_ImplDX12_Init(dev_.Get(), kFrames, DXGI_FORMAT_B8G8R8A8_UNORM, ui_heap_.Get(),
                         ui_heap_->GetCPUDescriptorHandleForHeapStart(), ui_heap_->GetGPUDescriptorHandleForHeapStart());
     LoadSettings();
+    WarmPipelines();
     Begin();
     LOGI("d3d12: %ux%u guest, %ux%u window, render scale %.3f", width, height, bb_w_, bb_h_, scale_);
     return true;
@@ -2162,6 +2173,37 @@ void D3D12Backend::DeliverBuilt(uint64_t h, ComPtr<ID3D12PipelineState> pso) {
     built_ready_.store(true, std::memory_order_release);
 }
 
+void D3D12Backend::RememberPipeline(const PsoKey& k) {
+    WarmKey w{k, 0, 0};
+    {
+        std::lock_guard lock(shader_lock_);
+        w.vs_check = shaders_[k.vs].check;
+        w.ps_check = shaders_[k.ps].check;
+    }
+    cache::AddPipelineKey(&w, sizeof(w));
+}
+
+// every start is a new process: the pipelines drawn in earlier runs are built on the build threads now, so their
+// first draw finds them made instead of loading or compiling them on the render thread
+void D3D12Backend::WarmPipelines() {
+    std::vector<std::vector<uint8_t>> keys = cache::TakePipelineKeys();
+    for (const auto& bytes : keys) {
+        if (bytes.size() != sizeof(WarmKey)) continue;
+        WarmKey w;
+        std::memcpy(&w, bytes.data(), sizeof(w));
+        cache::Post([this, w] {
+            ComPtr<ID3DBlob> vs = cache::FindShader(w.key.vs, w.vs_check);
+            ComPtr<ID3DBlob> ps = cache::FindShader(w.key.ps, w.ps_check);
+            if (!vs || !ps) return;
+            uint64_t h = Hash(&w.key, sizeof(w.key));
+            bool unused = false;
+            ComPtr<ID3D12PipelineState> pso = CreatePipeline(w.key, h, vs.Get(), ps.Get(), true, unused);
+            if (pso) DeliverBuilt(h, std::move(pso));
+        });
+    }
+    LOGI("d3d12: %zu pipelines from earlier runs being built", keys.size());
+}
+
 ID3D12PipelineState* D3D12Backend::EnsurePipeline(const PsoKey& k, bool wait) {
     if (built_ready_.load(std::memory_order_acquire)) TakeBuilt();
     uint64_t h = Hash(&k, sizeof(k));
@@ -2182,16 +2224,19 @@ ID3D12PipelineState* D3D12Backend::EnsurePipeline(const PsoKey& k, bool wait) {
     if (pending) {
         building_.insert(h);
         skipped_frame_ = true;
+        // ahead of the warm up: this one is missing from the frame now
         cache::Post([this, k, h] {
             bool unused = false;
             ID3DBlob* vs = EnsureShaderCode(k.vs, true, unused);
             ID3DBlob* ps = EnsureShaderCode(k.ps, true, unused);
             ComPtr<ID3D12PipelineState> pso;
             if (vs && ps) pso = CreatePipeline(k, h, vs, ps, true, unused);
+            if (pso) RememberPipeline(k);
             DeliverBuilt(h, std::move(pso));
-        });
+        }, true);
         return nullptr;
     }
+    if (pso) RememberPipeline(k);
     return (psos_[h] = std::move(pso)).Get();
 }
 
