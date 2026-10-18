@@ -18,6 +18,7 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 - **Display Mode** - Switch between Fullscreen, Borderless and Windowed.
 - **Resolution** - Lists every mode your monitor reports and defaults to your desktop resolution, replacing the original 640x480 resolution.
 - **Render Resolution** - Renders the game at a percentage of the output resolution, allowing supersampling or downscaling independent of the window size.
+- **Field of View** - Sets the horizontal field of view during gameplay from 45 to 140 degrees, with 65 being the game's default. Cutscenes and scopes keep the original.
 - **Max Frame Rate** - Caps the frame rate to your monitor's refresh rate or a custom value, or removes the cap entirely.
 - **V-Sync** - Reduces screen tearing.
 - **HDR Output** - Enables HDR10 output on displays with Windows HDR turned on, detected automatically. Highlights extend up to the display's peak brightness.

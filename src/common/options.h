@@ -17,6 +17,7 @@ struct Options {
     float mouse_sensitivity = 1.0f;
     uint32_t msaa = 0;  // samples a pixel of the scene, 0 off
     bool smaa = false;  // over the finished frame, HUD included; combines with msaa
+    uint32_t fov = 65;  // horizontal degrees on a 4:3 frame, 65 is the game's
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };
 Options& Opt();

@@ -150,6 +150,7 @@ const app::GameInfo app::kGame = {
         {"audio_output", nullptr, &game::Opt().audio_output},
         {"msaa", nullptr, &game::Opt().msaa},
         {"smaa", &game::Opt().smaa, nullptr},
+        {"fov", nullptr, &game::Opt().fov},
     },
     .load = game::Load,                     // reads more from the settings file's toml::table
     .save = game::Save,                     // writes more into it

@@ -311,6 +311,21 @@ std::string StepCameraCentring(Settings&, int step) {
     return OnOff(on);
 }
 
+// 45 to 140 in steps of 1, 65 the game's own
+constexpr int kFovMin = 45;
+constexpr int kFovMax = 140;
+constexpr uint32_t kGameFov = 65;
+
+std::string StepFieldOfView(Settings&, int step) {
+    uint32_t& fov = game::Opt().fov;
+    if (step) {
+        int slot = std::clamp(int(fov), kFovMin, kFovMax) - kFovMin;
+        fov = uint32_t(kFovMin + StepIndex(slot, step, kFovMax - kFovMin + 1));
+    }
+    std::string text = std::to_string(fov);
+    return fov == kGameFov ? text + " (DEFAULT)" : text;
+}
+
 // The rows, shared with the game's own options menu. A value row's id picks its step, held rows wait for Apply.
 using StepFn = std::string (*)(Settings& s, int step);
 
@@ -331,6 +346,7 @@ enum RowId {
     kHdrOutputRow,
     kMsaaRow,
     kSmaaRow,
+    kFieldOfViewRow,
 };
 
 // in RowId order
@@ -351,6 +367,7 @@ constexpr StepFn kSteps[] = {
     StepHdrOutput,
     StepMsaa,
     StepSmaa,
+    StepFieldOfView,
 };
 
 bool Held(int id) { return id == kDisplayModeRow || id == kResolutionRow; }
@@ -366,6 +383,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kDisplayModeRow, "DISPLAY MODE"},
     {Kind::Value, kResolutionRow, "RESOLUTION"},
     {Kind::Value, kRenderResolutionRow, "RENDER RESOLUTION"},
+    {Kind::Value, kFieldOfViewRow, "FIELD OF VIEW"},
     {Kind::Value, kVsyncRow, "VERTICAL SYNC"},
     {Kind::Value, kHdrOutputRow, "HDR OUTPUT"},
     {Kind::Value, kMaxFpsRow, "MAX FRAME RATE"},
@@ -631,6 +649,7 @@ void RestoreDefaults(int page) {
         game::Opt().audio_output = defaults.audio_output;
         game::Opt().msaa = defaults.msaa;
         game::Opt().smaa = defaults.smaa;
+        game::Opt().fov = defaults.fov;
         audio::SetOutputMode(defaults.audio_output);
         RestoreSettingsDefaults();
     } else {

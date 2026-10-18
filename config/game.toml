@@ -400,3 +400,12 @@ call = "MenuPrompts"
 [[hook]]
 at = 0x34D094
 call = "LatchOptionsMenu"
+
+# chase camera, both places it stores its angle: the field of view setting
+[[hook]]
+at = 0xB4404
+call = "ChaseFieldOfView"
+
+[[hook]]
+at = 0xB5DA6
+call = "ChaseFieldOfView"
