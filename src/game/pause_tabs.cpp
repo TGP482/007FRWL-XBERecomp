@@ -78,6 +78,18 @@ bool g_drawing = false;
 bool g_column = false;  // a stock tab of the column draws
 
 // a closed menu's screen may already be freed
+// every live UI object, the menu screens among them
+constexpr uint32_t kObjects = 0x8375E4;
+constexpr uint32_t kObjectCount = 0x8375E8;
+
+bool IsLive(uint32_t screen) {
+    uint32_t list = R32(kObjects);
+    for (uint32_t i = 0; screen && i < R32(kObjectCount); i++) {
+        if (R32(list + i * 4) == screen) return true;
+    }
+    return false;
+}
+
 bool IsTabScreen(uint32_t screen) {
     return Readable(screen) && R32(screen) == kMenuScreenVtable && R32(screen + kScreenCount) == kStockTabs;
 }
@@ -298,8 +310,8 @@ bool Step(X86Context& ctx, int step) {
 
 void UpdatePauseTabs(uint32_t screen) {
     if (!IsTabScreen(screen)) {
-        // menu closed: every clip draw reads the kept screen, which the game frees
-        g_tabs.screen = 0;
+        // menu closed: every clip draw reads the kept screen, which the game frees; a recomp page keeps it
+        if (!IsLive(g_tabs.screen)) g_tabs.screen = 0;
         return;
     }
     int stock = int(R32(screen + kScreenIndex));

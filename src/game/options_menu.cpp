@@ -138,6 +138,9 @@ constexpr uint32_t kStageHeightNow = 0x7626EC;
 // on a page the pause menu's rows drop what they hold besides their labels: the value boxes and arrows
 const char* const kOptionsPanel = "options_mc";
 constexpr int kMinLines = 9;
+// the front end's lines are spaced as the pause menu's: its step once seen, before that as measured on it
+constexpr float kPauseStep = 34.35f;
+constexpr int kFrontEndLines = 7;  // as many as fit its panel
 constexpr int kMaxPanelLevels = 8;
 constexpr int kLabelLevels = 3;  // how deep a row's clip may keep its label
 
@@ -210,6 +213,7 @@ Look g_looks[kPartCount][2][kMaxFields];
 bool g_copying = false;
 int g_tab_page = -1;  // the page a pause tab asked for, opened once its menu shows
 Lines g_lines;
+float g_pause_step = kPauseStep;
 std::array<uint32_t, kMaxRows> g_changed{};  // the frame each stock row last gained or lost the cursor
 uint32_t g_frame = 0;
 int g_last_index = -1;
@@ -256,14 +260,17 @@ int EntryCount() { return g_layout.menu == kPause ? 0 : kEntryCount; }
 bool ListShown() { return !PageOpen() && EntryCount() > 0; }
 
 // lines are as far apart as the stock rows nearest each other, and at least kMinLines fit the rows' height
-float LineStep() {
+float PauseLineStep() {
     float step = (SlotPlace(Slots() - 1).y - SlotPlace(0).y) / float(kMinLines - 1);
     for (int row = 1; row < Slots(); row++) step = std::min(step, SlotPlace(row).y - SlotPlace(row - 1).y);
     return step;
 }
 
+float LineStep() { return g_layout.menu == kPause ? PauseLineStep() : g_pause_step; }
+
 // as many lines as fit in the stock rows' height
 int LineSlots() {
+    if (g_layout.menu != kPause) return kFrontEndLines;
     float step = LineStep();
     float height = SlotPlace(Slots() - 1).y - SlotPlace(0).y;
     return step > 0.0f ? int(height / step) + 1 : Slots();
@@ -566,7 +573,8 @@ bool Matches(uint32_t object, bool input) {
     if (input && R32(object + kScreenTakesInput) != 1) return false;
     if (R32(object + kScreenColumns) != 1) return false;
     int rows = int(R32(object + kScreenRows));
-    bool ours = PageOpen() && rows == PageSlots();
+    // a page's own row count only matches its own screen: the pause tabs have 4 rows too
+    bool ours = PageOpen() && object == g_state.screen && rows == PageSlots();
     return rows == g_layout.stock || rows == g_layout.stock + EntryCount() || ours;
 }
 
@@ -935,6 +943,7 @@ void LatchOptionsMenu(X86Context&, uint8_t*) {
     bool unbind = input::TakeDeletePress();
     if (unbind && PageOpen() && OwnsScreen(g_state.screen) && !input::CaptureRecent()) UnbindFocusedRow();
     g_layout = MakeLayout(g_now);
+    if (g_layout.menu == kPause) g_pause_step = PauseLineStep();
     g_now = {};
     g_order = {};
     if (g_layout.menu >= 0) {
