@@ -18,6 +18,7 @@
 
 #include "common/mouse_keyboard.h"
 #include "game/flash.h"
+#include "game/menu_ports.h"
 #include "xdk/hle.h"
 
 bool MenuItemsShown();  // menu_cursor.cpp
@@ -151,6 +152,50 @@ std::map<uint32_t, Placed> g_placed;
 std::map<std::string, float> g_label_share;  // a legend text's drawn width over its field's, by its own text
 bool g_measuring = false;
 
+// split screen views, indexed by player port
+constexpr uint32_t kViewSet = 0x778E64;
+constexpr uint32_t kViewCount = 0x50;  // 0 outside split screen
+int g_hud_port = -1;  // the player port whose split screen HUD is being drawn, -1 outside one
+
+// game thread, each tick: each menu page's clip and the ports its screen takes
+std::map<uint32_t, uint32_t> g_menu_ports;
+uint32_t g_drawn_clip = 0;  // the Apt clip being drawn
+std::optional<uint32_t> g_drawn_ports;  // the ports of the menu whose text is being drawn
+
+bool TakesKeyboard(uint32_t ports) {
+    int keyboard = input::KeyboardPort();
+    return keyboard >= 0 && (ports >> keyboard & 1);
+}
+
+void UpdateMenuPorts() {
+    g_menu_ports.clear();
+    for (const MenuPorts& menu : ActiveMenuPorts()) g_menu_ports[menu.clip] = menu.ports;
+}
+
+// the ports of the nearest menu page holding the clip; the pages' texts are clips made again each frame, so they
+// are looked up through their parents as they are drawn
+std::optional<uint32_t> PortsOf(uint32_t clip) {
+    for (int depth = 0; clip && depth <= kMaxTreeDepth; depth++) {
+        auto found = g_menu_ports.find(clip);
+        if (found != g_menu_ports.end()) return found->second;
+        clip = R32(clip + kClipParent);
+    }
+    return std::nullopt;
+}
+
+// a clip outside every menu keeps the keyboard's prompts
+bool ClipTakesKeyboard(uint32_t clip) {
+    std::optional<uint32_t> ports = PortsOf(clip);
+    return !ports || TakesKeyboard(*ports);
+}
+
+// a menu text follows its menu's ports, a split screen HUD its view's player
+bool KeyboardPrompts() {
+    if (!input::KeyboardActive()) return false;
+    if (g_drawn_ports) return TakesKeyboard(*g_drawn_ports);
+    return g_hud_port < 0 || g_hud_port == input::KeyboardPort();
+}
+
 std::string PauseKey() {
     std::string name = input::ButtonKey(kStart);
     return name == "Escape" ? "ESC" : name;
@@ -259,6 +304,20 @@ void UpdateTextPlace(X86Context& ctx, uint32_t text, uint32_t picture, bool keyb
     x -= room;
 }
 
+// a legend of a menu another player drives keeps its picture, its texts back where they sat
+void KeepPadLegend(X86Context& ctx, uint32_t clip, uint32_t picture) {
+    if (picture) SetShown(picture, true);
+    for (uint32_t child : Children(clip)) {
+        if (!EditTextField(child)) continue;
+        UpdateTextPlace(ctx, child, picture, false);
+        auto placed = g_placed.find(child);
+        if (placed == g_placed.end()) continue;
+        float& x = G<float>(child + kMatrixTx);
+        if (x == placed->second.written) x = placed->second.base;
+        g_placed.erase(placed);
+    }
+}
+
 // the picture goes while the keys are shown, the texts are kept to be relabelled as they are drawn
 void ApplyLegend(X86Context& ctx, uint32_t clip, const Legend& legend, bool keyboard) {
     std::vector<uint32_t> children = Children(clip);
@@ -266,6 +325,7 @@ void ApplyLegend(X86Context& ctx, uint32_t clip, const Legend& legend, bool keyb
     for (uint32_t child : children) {
         if (Type(child) == kTypeSprite) picture = child;
     }
+    if (keyboard && !ClipTakesKeyboard(clip)) return KeepPadLegend(ctx, clip, picture);
     if (picture) SetShown(picture, !keyboard);
     for (uint32_t child : children) {
         uint32_t field = EditTextField(child);
@@ -767,7 +827,7 @@ bool NameStart(std::string& text) {
 std::optional<std::string> Reworded(const char* line) {
     std::string text(line, strnlen(line, kMaxText));
     bool changed = ReplaceAll(text, kPcWording, std::size(kPcWording));
-    if (input::KeyboardActive()) {
+    if (KeyboardPrompts()) {
         changed |= LeadWithKey(text);
         changed |= NameKeys(text);
         changed |= NameStart(text);
@@ -833,9 +893,30 @@ void DrawCaseButtonKeys(X86Context& ctx, uint32_t clip) {
     ctx = saved;
 }
 
+// a view's UI widget walk, after its view index is in eax
+void HudPromptsBegin(X86Context& ctx, uint8_t*) {
+    uint32_t views = R32(kViewSet);
+    bool split = views && R32(views + kViewCount);
+    g_hud_port = split ? int(ctx.eax) : -1;
+}
+
+// the walk returns
+void HudPromptsEnd(X86Context&, uint8_t*) { g_hud_port = -1; }
+
+// the script sets a text by making a new field, so the field is known by the clip drawing it
+void SetPromptField(uint32_t field) {
+    bool ours = field && g_drawn_clip && EditTextField(g_drawn_clip) == field;
+    g_drawn_ports.reset();
+    if (ours) g_drawn_ports = PortsOf(g_drawn_clip);
+}
+
+// an Apt clip is drawn, thiscall on the clip
+void LatchDrawnClip(X86Context& ctx, uint8_t*) { g_drawn_clip = ctx.ecx; }
+
 // frame tick, after the pads are read
 void MenuPrompts(X86Context& ctx, uint8_t*) {
     X86Context saved = ctx;
+    UpdateMenuPorts();
     UpdateLegends(ctx);
     ctx = saved;
 }

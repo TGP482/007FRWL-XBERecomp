@@ -19,6 +19,7 @@
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "game/flash.h"
+#include "game/menu_ports.h"
 #include "game/options_menu.h"
 #include "game/pause_tabs.h"
 #include "xdk/hle.h"
@@ -623,6 +624,24 @@ void UpdateCursor(X86Context& ctx) {
 }
 
 }  // namespace
+
+std::vector<MenuPorts> ActiveMenuPorts() {
+    std::vector<MenuPorts> menus;
+    uint32_t manager = R32(kListenerManager);
+    uint32_t first = manager ? R32(manager + kManagerFirst) : 0;
+    uint32_t end = manager ? R32(manager + kManagerEnd) : 0;
+    for (uint32_t at = first; first && at < end; at += 4) {
+        uint32_t listener = R32(at);
+        if (R32(listener) != kScreenListenerVtable) continue;
+        uint32_t screen = R32(listener + kListenerOwner);
+        if (R32(screen) != kMenuScreenVtable) continue;
+        uint32_t script = R32(screen + kScreenScript);
+        uint32_t path = script ? R32(script + kScriptPath) : 0;
+        uint32_t clip = Readable(path) ? Resolve(Text(path)) : 0;
+        if (clip) menus.push_back({clip, R32(listener + kListenerPorts)});
+    }
+    return menus;
+}
 
 // a menu page with a grid of items takes the input; a page whose script takes the codes itself has none
 bool MenuItemsShown() {

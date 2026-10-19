@@ -436,6 +436,20 @@ call = "MenuCursorFocus"
 at = 0x224BE2
 call = "MenuPrompts"
 
+# a view's UI widget walk: on split screen the prompts follow whether that player is on the keyboard's port
+[[hook]]
+at = 0x3599CB
+call = "HudPromptsBegin"
+
+[[hook]]
+at = 0x3599D8
+call = "HudPromptsEnd"
+
+# an Apt clip is drawn: a menu text's prompts follow the ports of the menu holding the clip
+[[hook]]
+at = 0x3006FF
+call = "LatchDrawnClip"
+
 # end of the frame render, once a frame: the options menu's rows of the next frame come from what this one drew
 [[hook]]
 at = 0x34D094

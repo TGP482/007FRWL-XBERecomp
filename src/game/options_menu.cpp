@@ -12,6 +12,7 @@
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "common/translations.h"
+#include "game/menu_ports.h"
 #include "game/options_menu.h"
 #include "game/pause_tabs.h"
 #include "core/log.h"
@@ -749,7 +750,7 @@ void OptionsMenuFocus(X86Context& ctx) {
 
 // the Apt text field draw, cdecl (field, unused): a page hides the stock rows and draws its own
 X86_EXTERN_FUNC(__imp__sub_00413E50);
-X86_FUNC(sub_00413E50) {
+static void DrawField(X86Context& ctx, uint8_t* base) {
     if (g_copying) return __imp__sub_00413E50(ctx, base);
     uint32_t data = R32(ctx.esp + 4);
     if (const char* label = PauseTabLabel()) {
@@ -768,6 +769,12 @@ X86_FUNC(sub_00413E50) {
     X86Context saved = ctx;
     DrawCopies(ctx, data, *seen);
     ctx = saved;
+}
+
+X86_FUNC(sub_00413E50) {
+    SetPromptField(R32(ctx.esp + 4));
+    DrawField(ctx, base);
+    SetPromptField(0);
 }
 
 // a menu screen takes a button, thiscall (port, button)
