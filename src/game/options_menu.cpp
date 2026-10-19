@@ -103,7 +103,7 @@ constexpr int kMaxRows = 8;
 constexpr size_t kMaxRaw = 64;
 
 // an entry's page is rows::Page of its index
-const char* const kEntries[] = {"RECOMP SETTINGS", "MOUSE AND KEYBOARD"};
+const char* const kEntries[] = {"RECOMP SETTINGS", "MOUSE AND KEYBOARD", "CONTROLLER"};
 constexpr int kEntryCount = int(std::size(kEntries));
 const char* const kDefaultsLabel = "RESTORE DEFAULTS";
 
@@ -248,7 +248,8 @@ std::string RowValue(int index) {
     if (!row) return std::string();
     std::string value = app::rows::Value(*row);
     // key names as they are
-    bool keys = row->kind == Kind::Bind && value != "UNBOUND" && value != "PRESS A KEY";
+    bool bound = row->kind == Kind::Bind || row->kind == Kind::PadBind;
+    bool keys = bound && value != "UNBOUND" && value != "PRESS A KEY" && value != "PRESS A BUTTON";
     return keys ? value : MenuText(value);
 }
 
