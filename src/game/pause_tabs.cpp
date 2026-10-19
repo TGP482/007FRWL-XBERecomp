@@ -10,6 +10,8 @@
 using namespace kernel;
 using namespace flash;
 
+void DrawCaseButtonKeys(X86Context& ctx, uint32_t clip);  // prompts.cpp
+
 namespace {
 
 // tab screen
@@ -130,7 +132,10 @@ void DrawChild(X86Context& ctx, uint8_t* base, Draw original, uint32_t draw) {
     uint32_t args[3] = {R32(ctx.esp + 4), R32(ctx.esp + 8), R32(ctx.esp + 12)};
     Column column;
     int stock = StockIndex();
-    if (g_drawing || stock < 0 || !FindColumn(args[1], column)) return original(ctx, base);
+    if (g_drawing || stock < 0 || !FindColumn(args[1], column)) {
+        original(ctx, base);
+        return DrawCaseButtonKeys(ctx, args[1]);
+    }
     bool away = g_tabs.tab != stock;
     if (away && args[1] == column.plates[stock]) {
         // the red plate moves to the recomp tab, a blue one takes its place
@@ -203,7 +208,8 @@ bool HoldPauseTabButton(uint32_t screen) {
 
 const char* PauseTabLabel() { return g_label; }
 
-// both of the player's child draws: the tab column's clips draw the recomp's tabs with them
+// both of the player's child draws: the tab column's clips draw the recomp's tabs with them, the attache case's
+// buttons their keys
 X86_EXTERN_FUNC(__imp__sub_00309875);
 X86_FUNC(sub_00309875) { DrawChild(ctx, base, __imp__sub_00309875, kDrawChild); }
 

@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -387,16 +388,20 @@ float LineWidth(X86Context& ctx, uint32_t text, float scale) {
 
 constexpr const char* kCaseButton = "subButton";
 constexpr const char* kCaseTv = "attachedClip_mc";
-constexpr const char* kCaseRoll = "display";
 constexpr uint32_t kTypeShape = 0x0C;
 constexpr uint32_t kCasePicturePlace = 1;  // in the clip's first places
+constexpr uint32_t kItemRemove = 4;
+constexpr uint32_t kRemoveDepth = 0x04;
+constexpr uint32_t kPlaceDepth = 0x08;
+constexpr uint32_t kMaxCaseFrames = 64;
 
 struct CasePicture {
     uint32_t character;
     int button;
 };
+// minibuttons exports bottom2, right2, left2, top2, L12, R12, read by the case script as codes 6, 7, 13, 12, 8, 9
 constexpr CasePicture kCasePictures[] = {
-    {29, kA}, {23, kB}, {13, kX}, {4, kY}, {26, kLeftTrigger}, {18, kRightTrigger},
+    {29, kA}, {13, kB}, {23, kX}, {4, kY}, {26, kLeftTrigger}, {18, kRightTrigger},
 };
 
 // the text manager, thiscall
@@ -406,6 +411,7 @@ constexpr uint32_t kDrawText = 0x357920;   // page position {x, y}, scale, text,
 constexpr uint32_t kSetFont = 0x355D70;    // font id, false and no font when it is not loaded
 constexpr uint32_t kFontId = 0x3A7E60;     // cdecl (name), the hash fonts are registered under
 constexpr uint32_t kDinLarge = 0x6D2F98;   // "din_large", the menus' heavy font
+constexpr uint32_t kNextLayer = 0x412BC0;  // cdecl (1), the depth the menus' next text draws at
 constexpr uint32_t kManagerFont = 0x1C;
 constexpr uint32_t kManagerGlyphScale = 0x4C;
 constexpr uint32_t kManagerPageWidth = 0x60;
@@ -417,6 +423,9 @@ constexpr uint32_t kAlignCentre = 1;
 constexpr float kKeyHeight = 0.5f;  // of the picture's height
 constexpr float kKeyWidth = 0.9f;   // of the picture's width, at most
 constexpr float kShadow = 1.0f / 480.0f;  // of the page height
+constexpr float kRollSpan = 0.6f;  // of the picture's height, how far the keys roll
+constexpr double kRollMs = 100.0;  // until a roll is timed: 3 blur frames at 30 fps
+constexpr double kMaxRollMs = 1000.0;
 
 // RenderWare's record of the texture on stage 0, which the game's own SetTexture calls leave behind
 constexpr uint32_t kAppliedTexture = 0x810D8C;
@@ -436,6 +445,7 @@ struct CaseKey {
     float width;   // share of the stage
     float height;  // share of the stage
     std::string key;
+    uint32_t clip;  // the button, drawn with it
 };
 
 // a shape's matrix, kept while the shape is drawn at no size: shapes draw whether shown or not
@@ -444,22 +454,52 @@ struct Collapsed {
     std::array<float, 4> axes;
 };
 
+// a button rolling between pictures, timed so the keys roll smoothly between the timeline's frames
+struct Roll {
+    std::string settled;  // the key it last settled on
+    double start_ms = 0;
+    double length_ms = kRollMs;  // the last roll's
+    bool rolling = false;
+};
+
 struct CaseState {
     std::vector<uint32_t> hidden;
     std::vector<Collapsed> collapsed;
     std::vector<CaseKey> keys;
+    std::map<uint32_t, Roll> rolls;  // by the button's clip
 };
 CaseState g_case;
 
-std::optional<int> CaseButtonOf(uint32_t clip) {
+const CasePicture* CaseButtonOf(uint32_t clip) {
     uint32_t character = Character(clip);
-    if (!character || NameOf(clip) != kCaseButton) return std::nullopt;
+    if (!character || NameOf(clip) != kCaseButton) return nullptr;
     std::vector<uint32_t> places = FirstPlaces(character);
-    if (places.size() <= kCasePicturePlace) return std::nullopt;
+    if (places.size() <= kCasePicturePlace) return nullptr;
     for (const CasePicture& picture : kCasePictures) {
-        if (picture.character == places[kCasePicturePlace]) return picture.button;
+        if (picture.character == places[kCasePicturePlace]) return &picture;
     }
-    return std::nullopt;
+    return nullptr;
+}
+
+// whether the button's timeline shows its picture now; between pictures it plays a blur of others
+bool ShowsCasePicture(uint32_t clip, uint32_t picture) {
+    uint32_t character = Character(clip);
+    uint32_t frames = R32(character + kCharacterFrames);
+    uint32_t frame = R32(R32(clip + kClipData) + kSpriteFrame);
+    uint32_t last = std::min({frame + 1, R32(character + kCharacterFrameCount), kMaxCaseFrames});
+    std::map<uint32_t, uint32_t> shown;  // character by depth
+    for (uint32_t i = 0; Readable(frames) && i < last; i++) {
+        uint32_t count = std::min(R32(frames + i * kFrameSize), kMaxFrameItems);
+        uint32_t items = R32(frames + i * kFrameSize + kFrameItems);
+        for (uint32_t k = 0; Readable(items) && k < count; k++) {
+            uint32_t item = R32(items + k * 4);
+            if (!Readable(item)) continue;
+            if (R32(item) == kItemRemove) shown.erase(R32(item + kRemoveDepth));
+            bool place = R32(item) == kItemPlace && (R32(item + kPlaceFlags) & kPlacesCharacter);
+            if (place) shown[R32(item + kPlaceDepth)] = R32(item + kPlaceCharacter);
+        }
+    }
+    return std::any_of(shown.begin(), shown.end(), [&](const auto& depth) { return depth.second == picture; });
 }
 
 Point Transform(uint32_t clip, Point point) {
@@ -486,7 +526,7 @@ std::optional<CaseKey> CaseKeyOf(X86Context& ctx, uint32_t clip) {
     float height = G<float>(kStageHeight);
     if (!(width > 0) || !(height > 0) || high.y <= low.y) return std::nullopt;
     Point middle = {(low.x + high.x) / 2 / width, (low.y + high.y) / 2 / height};
-    return CaseKey{middle, (high.x - low.x) / width, (high.y - low.y) / height, {}};
+    return CaseKey{middle, (high.x - low.x) / width, (high.y - low.y) / height, {}, clip};
 }
 
 void ShowCasePictures() {
@@ -506,7 +546,6 @@ void CollapseForRender(uint32_t shape) {
     g_case.collapsed.push_back(picture);
 }
 
-
 // the button's picture, the shape it places beside its frame; an entered button's picture is removed
 uint32_t CasePictureOf(uint32_t clip) {
     for (uint32_t child : Children(clip)) {
@@ -515,10 +554,9 @@ uint32_t CasePictureOf(uint32_t clip) {
     return 0;
 }
 
-// the TV rolls from one picture to the next through a strip of its own
-bool IsCaseRoll(uint32_t clip) {
+bool InCaseTv(uint32_t clip) {
     uint32_t parent = R32(clip + kClipParent);
-    return NameOf(clip) == kCaseRoll && Readable(parent) && NameOf(parent) == kCaseTv;
+    return Readable(parent) && NameOf(parent) == kCaseTv;
 }
 
 void HideForRender(uint32_t clip) {
@@ -526,20 +564,60 @@ void HideForRender(uint32_t clip) {
     g_case.hidden.push_back(clip);
 }
 
-void VisitCase(X86Context& ctx, uint32_t clip, int depth) {
-    if (IsCaseRoll(clip)) {
-        if (Shown(clip)) HideForRender(clip);
-        return;
+void HideSprites(const std::vector<uint32_t>& clips, uint32_t keep) {
+    for (uint32_t clip : clips) {
+        if (clip != keep && Type(clip) == kTypeSprite && Shown(clip)) HideForRender(clip);
     }
-    if (std::optional<int> button = CaseButtonOf(clip)) {
+}
+
+// the button's frame is a sprite beside its picture
+void HideCaseFrame(uint32_t clip) { HideSprites(Children(clip), 0); }
+
+// a trigger's $TRIGGER_L or $TRIGGER_R text is a sprite beside the button, the other buttons have none
+void HideTriggerText(uint32_t clip) { HideSprites(Children(R32(clip + kClipParent)), clip); }
+
+void AddCaseKey(CaseKey place, const std::string& key, float shift) {
+    place.middle.y += shift * place.height;
+    place.key = key;
+    g_case.keys.push_back(place);
+}
+
+double NowMs() {
+    auto since = std::chrono::steady_clock::now().time_since_epoch();
+    return std::chrono::duration<double, std::milli>(since).count();
+}
+
+// the button rolls between pictures through a blur of others: the last key rolls up and out, this one in below
+void AddRollingKeys(uint32_t clip, const CaseKey& place, const std::string& key) {
+    Roll& roll = g_case.rolls[clip];
+    if (!roll.rolling) roll.start_ms = NowMs();
+    roll.rolling = true;
+    float done = float(std::min((NowMs() - roll.start_ms) / roll.length_ms, 1.0));
+    if (!roll.settled.empty()) AddCaseKey(place, roll.settled, -done * kRollSpan);
+    AddCaseKey(place, key, (1.0f - done) * kRollSpan);
+}
+
+void AddSettledKey(uint32_t clip, const CaseKey& place, const std::string& key) {
+    Roll& roll = g_case.rolls[clip];
+    double length = NowMs() - roll.start_ms;
+    if (roll.rolling && length > 0 && length < kMaxRollMs) roll.length_ms = length;
+    roll.rolling = false;
+    roll.settled = key;
+    AddCaseKey(place, key, 0.0f);
+}
+
+void VisitCase(X86Context& ctx, uint32_t clip, int depth) {
+    if (const CasePicture* button = CaseButtonOf(clip)) {
+        if (!Shown(clip)) return;
+        if (InCaseTv(clip)) HideCaseFrame(clip);
+        HideTriggerText(clip);
         uint32_t picture = CasePictureOf(clip);
-        if (!picture || !Shown(clip)) return;
-        std::string key = input::ButtonKey(*button);
-        std::optional<CaseKey> place = key.empty() ? std::nullopt : CaseKeyOf(ctx, clip);
+        std::string key = input::ButtonKey(button->button);
+        std::optional<CaseKey> place = !picture || key.empty() ? std::nullopt : CaseKeyOf(ctx, clip);
         if (!place) return;
-        place->key = key;
-        g_case.keys.push_back(*place);
         CollapseForRender(picture);
+        if (!ShowsCasePicture(clip, button->character)) return AddRollingKeys(clip, *place, key);
+        AddSettledKey(clip, *place, key);
         return;
     }
     if (depth >= kMaxTreeDepth) return;
@@ -551,8 +629,7 @@ void UpdateCaseKeys(X86Context& ctx) {
     g_case.keys.clear();
     g_case.hidden.clear();
     g_case.collapsed.clear();
-    // a page of items over the case, its pause page, takes the menus' own prompts
-    if (!input::KeyboardActive() || MenuItemsShown()) return;
+    if (!input::KeyboardActive()) return;
     for (uint32_t level : Levels()) VisitCase(ctx, level, 0);
 }
 
@@ -724,7 +801,8 @@ void FitRect(uint32_t rect, float width, uint32_t align) {
 
 }  // namespace
 
-bool CaseShown() { return !g_case.keys.empty(); }
+// a page of items over the case, its pause page, takes the menu cursor
+bool CaseShown() { return !g_case.keys.empty() && !MenuItemsShown(); }
 
 // before the Flash render, 0x412F1F
 void HideCasePictures(X86Context& ctx, uint8_t*) {
@@ -733,20 +811,25 @@ void HideCasePictures(X86Context& ctx, uint8_t*) {
     ctx = saved;
 }
 
-// the Flash menus are drawn, 0x412F24, still in their 2D pass: the pictures back and the case's keys over them
-void DrawCaseKeys(X86Context& ctx, uint8_t*) {
-    X86Context saved = ctx;
-    ShowCasePictures();
+// the Flash menus are drawn, 0x412F24: the pictures back
+void DrawCaseKeys(X86Context& ctx, uint8_t*) { ShowCasePictures(); }
+
+// a clip just drawn by the Flash render: a button's keys go over it, under what draws later such as the pause page
+void DrawCaseButtonKeys(X86Context& ctx, uint32_t clip) {
+    auto ours = [clip](const CaseKey& key) { return key.clip == clip; };
     uint32_t manager = R32(kTextManager);
-    if (!g_case.keys.empty() && manager && R32(manager + kManagerFont)) {
-        uint32_t previous_font = R32(manager + kManagerFont);
-        uint32_t id = CallGuest(ctx, kFontId, {kDinLarge});
-        ctx.ecx = manager;
-        if (!(CallGuest(ctx, kSetFont, {id}) & 0xFF)) W32(manager + kManagerFont, previous_font);
-        W32(kAppliedTexture, kNoTexture);
-        for (const CaseKey& key : g_case.keys) DrawCaseKey(ctx, manager, key);
-        W32(manager + kManagerFont, previous_font);
+    if (std::none_of(g_case.keys.begin(), g_case.keys.end(), ours) || !manager || !R32(manager + kManagerFont)) return;
+    X86Context saved = ctx;
+    uint32_t previous_font = R32(manager + kManagerFont);
+    uint32_t id = CallGuest(ctx, kFontId, {kDinLarge});
+    ctx.ecx = manager;
+    if (!(CallGuest(ctx, kSetFont, {id}) & 0xFF)) W32(manager + kManagerFont, previous_font);
+    CallGuest(ctx, kNextLayer, {1});
+    W32(kAppliedTexture, kNoTexture);
+    for (const CaseKey& key : g_case.keys) {
+        if (ours(key)) DrawCaseKey(ctx, manager, key);
     }
+    W32(manager + kManagerFont, previous_font);
     ctx = saved;
 }
 
