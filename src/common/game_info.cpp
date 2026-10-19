@@ -181,6 +181,7 @@ const app::GameInfo app::kGame = {
     .options = {                            // game settings kept in the settings file
         {"invert_mouse", &game::Opt().invert_mouse, nullptr},
         {"camera_centring", &game::Opt().camera_centring, nullptr},
+        {"free_aim", &game::Opt().free_aim, nullptr},
         {"skip_intros", &game::Opt().skip_intros, nullptr},
         {"skippable_cutscenes", &game::Opt().skippable_cutscenes, nullptr},
         {"fps_counter", &game::Opt().fps_counter, nullptr},

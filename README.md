@@ -33,6 +33,7 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 
 ### Input
 - **Controller** - Controller with SDL3 support. Defaults match the Xbox layout.
+- **Free Aim** - Adds the rocket launcher's over the shoulder aim to every gun while aim is held, instead of locking onto a target.
 
 ### General
 - **Skippable Cutscenes** - Allows the in game cutscenes to be skipped with ESC or the Start button.

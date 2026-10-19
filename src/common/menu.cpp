@@ -397,6 +397,12 @@ std::string StepCameraCentring(Settings&, int step) {
     return OnOff(on);
 }
 
+std::string StepFreeAim(Settings&, int step) {
+    bool& on = game::Opt().free_aim;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
 // 45 to 140 in steps of 1, 65 the game's own
 constexpr int kFovMin = 45;
 constexpr int kFovMax = 140;
@@ -448,6 +454,7 @@ enum RowId {
     kMonitorRow,
     kPauseOnFocusLossRow,
     kSkippableCutscenesRow,
+    kFreeAimRow,
 };
 
 // in RowId order
@@ -474,6 +481,7 @@ constexpr StepFn kSteps[] = {
     StepMonitor,
     StepPauseOnFocusLoss,
     StepSkippableCutscenes,
+    StepFreeAim,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -516,6 +524,7 @@ const std::vector<Row>& InputRows() {
             {Kind::Value, kSensitivityRow, "MOUSE SENSITIVITY"},
             {Kind::Value, kInvertLookRow, "INVERT LOOK"},
             {Kind::Value, kCameraCentringRow, "CAMERA CENTRING"},
+            {Kind::Value, kFreeAimRow, "FREE AIM"},
             {Kind::Heading, -1, "KEYBOARD"},
         };
         std::span<const input::Action> actions = input::Actions();
@@ -890,6 +899,7 @@ void RestoreDefaults(int page) {
         options.mouse_sensitivity = defaults.mouse_sensitivity;
         options.invert_mouse = defaults.invert_mouse;
         options.camera_centring = defaults.camera_centring;
+        options.free_aim = defaults.free_aim;
         options.walk_speed = defaults.walk_speed;
         input::ResetBindings();
     }
