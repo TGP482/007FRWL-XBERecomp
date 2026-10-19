@@ -1,3 +1,5 @@
+#include <cstring>
+
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
 #include "xdk/hle.h"
@@ -38,9 +40,9 @@ constexpr uint32_t kStatePlayer = 0x4C;
 // the throw state's action dispatch 0x13E0D0, thiscall: the frame seconds and the action from esp
 constexpr uint32_t kActionSeconds = 8;
 constexpr uint32_t kActionId = 0x10;
-constexpr uint32_t kActionArgs = 5;
-constexpr uint32_t kActionRootMotion = 9;  // the firing state's update: the animation's root motion alone
-constexpr uint32_t kAimUpdate = 0x14052;    // thiscall on the state (seconds): turn, pitch, aim point, root motion
+constexpr uint32_t kActionAimItem = 0x15;  // the firing state's update: the item aims at the aim point, no turn
+constexpr uint32_t kAnimationArgs = 5;
+constexpr uint32_t kAimUpdate = 0x14052;   // thiscall on the state (seconds): turn, pitch, aim point, root motion
 
 // the fire button as the gun fire check 0x138290 reads it
 constexpr uint32_t kGunSingleShot = 0x160;     // gun vtable slot, thiscall: a press a shot, else fires while held
@@ -49,8 +51,18 @@ constexpr uint32_t kInputManager = 0x77F5BC;
 constexpr uint32_t kActionPressed = 0x34DEC0;  // thiscall on the manager (port, action)
 constexpr uint32_t kFireAction = 0xFF68BD8B;
 
+// the player's RenderWare frame: its getter object, the matrix getter and the update, both cdecl(frame)
+constexpr uint32_t kPlayerFrameGetter = 0x28;  // thiscall slot 0 on the object here returns the frame
+constexpr uint32_t kFrameGetMatrix = 0x262A10;
+constexpr uint32_t kFrameUpdateObjects = 0x262970;
+constexpr uint32_t kMatrixAxesBytes = 0x30;  // right, up and at, each 16 bytes, before the position
+
 uint32_t g_player = 0;  // in the throw state through free aim
 uint32_t g_frame = 0;
+uint32_t g_firing_player = 0;  // in the firing state through free aim
+uint32_t g_firing_frame = 0;
+// the aim update runs inside the firing state, which plays its own animation and moves the player itself
+bool g_aim_while_firing = false;
 
 bool KeyboardPlayer(uint32_t player) {
     return player && R32(player) == kPlayerVtable && int(R32(player + kPlayerPort)) == input::KeyboardPort();
@@ -128,22 +140,59 @@ X86_FUNC(sub_0001F3F3) {
     ctx.eax = fires;
 }
 
-// throw state action dispatch: each shot puts a free aim gun through the firing state, whose update has no aim, so
-// the view stood still while firing. There the aim update runs instead; it runs the root motion too
+// throw state action dispatch: each shot puts a free aim gun through the firing state (useItem), whose update aims
+// the item but never turns, so the view stood still while firing. The aim update runs there first
 X86_EXTERN_FUNC(__imp__sub_000137C9);
 X86_FUNC(sub_000137C9) {
     uint32_t state = ctx.ecx;
     uint32_t player = R32(state + kStatePlayer);
-    bool root_motion = R32(ctx.esp + kActionId) == kActionRootMotion;
-    if (!root_motion || !FreeAimGun(ctx, player, CurrentGun(ctx, player))) {
+    bool aim_item = R32(ctx.esp + kActionId) == kActionAimItem;
+    if (aim_item && FreeAimGun(ctx, player, CurrentGun(ctx, player))) {
+        g_firing_player = player;
+        g_firing_frame = R32(kFrameCount);
+        g_aim_while_firing = true;
         ctx.ecx = state;
-        __imp__sub_000137C9(ctx, base);
-        return;
+        CallGuest(ctx, kAimUpdate, {R32(ctx.esp + kActionSeconds)});
+        g_aim_while_firing = false;
     }
     ctx.ecx = state;
-    CallGuest(ctx, kAimUpdate, {R32(ctx.esp + kActionSeconds)});
-    // the root motion action answers 0
-    Return(ctx, 0, kActionArgs);
+    __imp__sub_000137C9(ctx, base);
+}
+
+// player root motion, thiscall on the player: the firing animation's root sets the player's facing each frame, which
+// undid the mouse turn. While a free aim gun fires only its move is kept
+X86_EXTERN_FUNC(__imp__sub_00015D6C);
+X86_FUNC(sub_00015D6C) {
+    uint32_t player = ctx.ecx;
+    if (g_aim_while_firing) {
+        Return(ctx, 0, 0);
+        return;
+    }
+    bool firing = player == g_firing_player && R32(kFrameCount) - g_firing_frame <= 1;
+    if (!firing) {
+        __imp__sub_00015D6C(ctx, base);
+        return;
+    }
+    ctx.ecx = player + kPlayerFrameGetter;
+    uint32_t frame = CallGuest(ctx, R32(R32(player + kPlayerFrameGetter)), {});
+    uint32_t matrix = CallGuest(ctx, kFrameGetMatrix, {frame});
+    uint8_t axes[kMatrixAxesBytes];
+    std::memcpy(axes, HostPtr(matrix), sizeof(axes));
+    ctx.ecx = player;
+    __imp__sub_00015D6C(ctx, base);
+    std::memcpy(HostPtr(matrix), axes, sizeof(axes));
+    CallGuest(ctx, kFrameUpdateObjects, {frame});
+}
+
+// state animation, thiscall on the state (animation, 4 more): the aim pose would replace the firing animation, whose
+// end the firing state waits for
+X86_EXTERN_FUNC(__imp__sub_0033CDF0);
+X86_FUNC(sub_0033CDF0) {
+    if (!g_aim_while_firing) {
+        __imp__sub_0033CDF0(ctx, base);
+        return;
+    }
+    Return(ctx, 0, kAnimationArgs);
 }
 
 // gun fire frame, thiscall(frame, normalise) on the gun: free aim shots go at the aim point
