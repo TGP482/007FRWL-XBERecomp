@@ -1,3 +1,4 @@
+#include <bit>
 #include <cstring>
 
 #include "common/mouse_keyboard.h"
@@ -6,13 +7,14 @@
 
 // Free aim: holding aim with any gun goes into the rocket launcher's over the shoulder aim, the throw state
 // (PlayerThrowItemSM), instead of locking on. The gun is passed off as the rocket launcher only for the checks that
-// let it in and let it fire there, and its shots go at the aim point the state keeps under the crosshair.
+// let it in and let it fire there, and its shots go down the middle of the view. None of it runs in cutscenes.
 
 using namespace kernel;
 
 namespace {
 
 constexpr uint32_t kFrameCount = 0x824368;
+constexpr uint32_t kCutscenePlaying = 0x82E0BE;  // byte
 constexpr uint32_t kLinkOffset = 0x20;  // object links point 0x20 into the object
 
 // the player
@@ -21,6 +23,9 @@ constexpr uint32_t kPlayerPort = 0xB24;
 constexpr uint32_t kPlayerAimFlags = 0x5E8;
 constexpr uint32_t kAimFlagAiming = 0x001;  // shots go at the aim point
 constexpr uint32_t kCurrentGun = 0x20311;    // thiscall, the gun in hand or 0
+constexpr uint32_t kPlayerAimPoint = 0x604;
+constexpr uint32_t kPlayerCarried = 0x1FBA5;  // thiscall, the object the player holds onto or 0
+constexpr uint32_t kCollisionId = 0x64;
 
 // the gun
 constexpr uint32_t kGunOwner = 0x1CC;
@@ -57,6 +62,41 @@ constexpr uint32_t kFrameGetMatrix = 0x262A10;
 constexpr uint32_t kFrameUpdateObjects = 0x262970;
 constexpr uint32_t kMatrixAxesBytes = 0x30;  // right, up and at, each 16 bytes, before the position
 
+// the view camera of each port, thiscall on the manager (port): position, then angles for the matrix builder
+constexpr uint32_t kCameraManager = 0x778E64;
+constexpr uint32_t kCameraPosition = 0x337F60;
+constexpr uint32_t kCameraAngles = 0x337F80;
+constexpr uint32_t kAnglesToMatrix = 0x14EE9;  // cdecl(matrix out, angles)
+constexpr uint32_t kMatrixAt = 0x20;
+constexpr uint32_t kMatrixSize = 0x40;
+constexpr float kViewRayLength = 100.0f;  // as the crosshair's own target test 0x13D000
+
+// the line test the crosshair target test makes, from the world [0x778E28] vtable +8
+constexpr uint32_t kCollision = 0x778E28;
+constexpr uint32_t kCollisionWorld = 8;
+constexpr uint32_t kLineInit = 0x3D3E20;    // thiscall on the line (start, end, mask, flags, 0, 0)
+constexpr uint32_t kLineMask = 0x4800136;
+constexpr uint32_t kLineFlags = 0x800000;
+constexpr uint32_t kWorldLineTest = 0x2839D0;  // thiscall on the world (line, nearest hit)
+
+// nearest hit callback, its line, ignore list and our end point after it
+constexpr uint32_t kNearestHitVtable = 0x691430;
+constexpr uint32_t kHitBest = 0x04;
+constexpr uint32_t kHitFraction = 0x24;
+constexpr uint32_t kHitObject = 0x30;
+constexpr uint32_t kHitLine = 0x80;
+constexpr uint32_t kHitIgnoreList = 0xBC;
+constexpr uint32_t kHitIgnoreCount = 0xC0;
+constexpr uint32_t kHitEnd = 0xD0;
+constexpr uint32_t kHitIgnored = 0xE0;
+constexpr uint32_t kHitSize = 0x100;
+
+struct Vec {
+    float x;
+    float y;
+    float z;
+};
+
 uint32_t g_player = 0;  // in the throw state through free aim
 uint32_t g_frame = 0;
 uint32_t g_firing_player = 0;  // in the firing state through free aim
@@ -80,12 +120,17 @@ bool IsGun(X86Context& ctx, uint32_t item) {
     return Answers(ctx, item, kGunName) && !Answers(ctx, item, kLaserWatchName);
 }
 
+bool CutscenePlaying() { return G<uint8_t>(kCutscenePlaying) != 0; }
+
 bool FreeAimGun(X86Context& ctx, uint32_t player, uint32_t gun) {
-    if (!game::Opt().free_aim || !gun || !KeyboardPlayer(player)) return false;
+    if (!game::Opt().free_aim || !gun || CutscenePlaying() || !KeyboardPlayer(player)) return false;
     return !(R32(gun + kGunFlags) & kGunAimsAsThrown) && IsGun(ctx, gun);
 }
 
-bool InFreeAim(uint32_t player) { return player && player == g_player && R32(kFrameCount) - g_frame <= 1; }
+bool InFreeAim(uint32_t player) {
+    if (!player || player != g_player || CutscenePlaying()) return false;
+    return R32(kFrameCount) - g_frame <= 1;
+}
 
 uint32_t CurrentGun(X86Context& ctx, uint32_t player) {
     ctx.ecx = player;
@@ -102,6 +147,62 @@ bool FirePressed(X86Context& ctx, uint32_t player) {
     uint32_t port = CallGuest(ctx, R32(R32(player + kPlayerInput) + 4), {});
     ctx.ecx = R32(kInputManager);
     return (CallGuest(ctx, kActionPressed, {port, kFireAction}) & 0xFF) != 0;
+}
+
+Vec ReadVec(uint32_t address) { return {G<float>(address), G<float>(address + 4), G<float>(address + 8)}; }
+
+void WriteVec(uint32_t address, Vec v) {
+    W32(address, std::bit_cast<uint32_t>(v.x));
+    W32(address + 4, std::bit_cast<uint32_t>(v.y));
+    W32(address + 8, std::bit_cast<uint32_t>(v.z));
+}
+
+Vec Along(Vec start, Vec end, float fraction) {
+    return {start.x + (end.x - start.x) * fraction, start.y + (end.y - start.y) * fraction,
+            start.z + (end.z - start.z) * fraction};
+}
+
+// how far along start to end the first thing the player can hit lies, 1 for nothing
+float NearestHit(X86Context& ctx, uint32_t player, uint32_t start, Vec end) {
+    static const uint32_t hit = mem::AllocSystem(kHitSize);
+    W32(hit, kNearestHitVtable);
+    W32(hit + kHitBest, std::bit_cast<uint32_t>(1.0f));
+    W32(hit + kHitFraction, std::bit_cast<uint32_t>(1.0f));
+    W32(hit + kHitObject, 0);
+    WriteVec(hit + kHitEnd, end);
+    ctx.ecx = hit + kHitLine;
+    CallGuest(ctx, kLineInit, {start, hit + kHitEnd, kLineMask, kLineFlags, 0, 0});
+
+    uint32_t ignored = 1;
+    W32(hit + kHitIgnored, R32(player + kCollisionId));
+    ctx.ecx = player;
+    uint32_t carried = CallGuest(ctx, kPlayerCarried, {});
+    if (carried) W32(hit + kHitIgnored + 4 * ignored++, R32(carried + kCollisionId));
+    W32(hit + kHitIgnoreList, hit + kHitIgnored);
+    W32(hit + kHitIgnoreCount, ignored);
+
+    ctx.ecx = R32(kCollision);
+    uint32_t world = CallGuest(ctx, R32(R32(ctx.ecx) + kCollisionWorld), {});
+    ctx.ecx = world;
+    CallGuest(ctx, kWorldLineTest, {hit + kHitLine, hit});
+    return G<float>(hit + kHitFraction);
+}
+
+// where the middle of the player's view meets the world
+Vec ViewTarget(X86Context& ctx, uint32_t player) {
+    static const uint32_t matrix = mem::AllocSystem(kMatrixSize);
+    uint32_t port = R32(player + kPlayerPort);
+    uint32_t cameras = R32(kCameraManager);
+    ctx.ecx = cameras;
+    uint32_t eye = CallGuest(ctx, kCameraPosition, {port});
+    ctx.ecx = cameras;
+    uint32_t angles = CallGuest(ctx, kCameraAngles, {port});
+    CallGuest(ctx, kAnglesToMatrix, {matrix, angles});
+
+    Vec start = ReadVec(eye);
+    Vec at = ReadVec(matrix + kMatrixAt);
+    Vec end = {start.x + at.x * kViewRayLength, start.y + at.y * kViewRayLength, start.z + at.z * kViewRayLength};
+    return Along(start, end, NearestHit(ctx, player, eye, end));
 }
 
 }  // namespace
@@ -195,7 +296,8 @@ X86_FUNC(sub_0033CDF0) {
     Return(ctx, 0, kAnimationArgs);
 }
 
-// gun fire frame, thiscall(frame, normalise) on the gun: free aim shots go at the aim point
+// gun fire frame, thiscall(frame, normalise) on the gun: free aim shots leave the muzzle for where the middle of the
+// view meets the world. The state's aim point sits 15 units out from the player's head, off the crosshair elsewhere
 X86_EXTERN_FUNC(__imp__sub_00019BD3);
 X86_FUNC(sub_00019BD3) {
     uint32_t link = R32(ctx.ecx + kGunOwner);
@@ -206,7 +308,12 @@ X86_FUNC(sub_00019BD3) {
     }
     uint32_t flags = R32(player + kPlayerAimFlags);
     uint32_t added = ~flags & kAimFlagAiming;
+    uint32_t gun = ctx.ecx;
+    Vec aim_point = ReadVec(player + kPlayerAimPoint);
+    WriteVec(player + kPlayerAimPoint, ViewTarget(ctx, player));
     W32(player + kPlayerAimFlags, flags | added);
+    ctx.ecx = gun;
     __imp__sub_00019BD3(ctx, base);
     W32(player + kPlayerAimFlags, R32(player + kPlayerAimFlags) & ~added);
+    WriteVec(player + kPlayerAimPoint, aim_point);
 }
