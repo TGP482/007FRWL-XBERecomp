@@ -614,7 +614,19 @@ void ApplyPending(X86Context& ctx) {
     if (pending.accept) input::Press(KeysOf(pending.screen).accept);
 }
 
+// the item the cursor is on, pressed by a click or by a click on it waiting for its jump
+void PointAt(uint32_t screen, uint32_t index, Edges edges) {
+    Pending& pending = g_state.pending;
+    bool clicked = pending.accept && pending.screen == screen && pending.index == index;
+    pending = {screen, index, edges.click || clicked};
+}
+
 void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
+    // a recomp page's lines are its own, not the stock items
+    if (std::optional<int> row = OptionsMenuRowAt(screen, stage.x, stage.y)) {
+        if (*row >= 0) PointAt(screen, uint32_t(*row), edges);
+        return;
+    }
     input::Tap accept = KeysOf(screen).accept;
     std::optional<Items> items = HasInputHandler(screen) ? std::nullopt : FindItems(screen);
     // a page with nothing to point at takes a click anywhere
@@ -646,9 +658,7 @@ void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
     uint32_t slot = order == Order::Reverse ? last - *hit : *hit;
     if (tabs) PointPauseTab(extra ? tab : int(slot));
     uint32_t index = options ? uint32_t(OptionsMenuIndexAt(int(slot))) : slot;
-    Pending& pending = g_state.pending;
-    bool clicked = pending.accept && pending.screen == screen && pending.index == index;
-    pending = {screen, index, edges.click || clicked};
+    PointAt(screen, index, edges);
 }
 
 // a new page starts from where the cursor rests: only a move or a click after that acts

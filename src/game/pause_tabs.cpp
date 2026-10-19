@@ -132,6 +132,10 @@ void DrawExtraTabs(X86Context& ctx, uint32_t draw, const uint32_t args[3], const
 
 void DrawChild(X86Context& ctx, uint8_t* base, Draw original, uint32_t draw) {
     uint32_t args[3] = {R32(ctx.esp + 4), R32(ctx.esp + 8), R32(ctx.esp + 12)};
+    if (HideOptionsClip(args[1])) {
+        Return(ctx, 0, 0);
+        return;
+    }
     Column column;
     int stock = StockIndex();
     if (g_drawing || stock < 0 || !FindColumn(args[1], column)) {

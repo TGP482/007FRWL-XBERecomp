@@ -12,6 +12,7 @@
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "common/translations.h"
+#include "game/flash.h"
 #include "game/menu_ports.h"
 #include "game/options_menu.h"
 #include "game/pause_tabs.h"
@@ -19,8 +20,9 @@
 #include "xdk/hle.h"
 
 // Recomp settings in the game's own options menu, the front end's and the pause menu's. Entries under the front end's
-// stock rows open pages with the F10 panel's rows, the pause menu's tabs open them straight away. Each row is drawn as a copy of a stock row's text, and the stock menu screen
-// keeps the cursor, so the rows look and sound as the game's own.
+// stock rows open pages with the F10 panel's rows, the pause menu's tabs open them straight away. A page with
+// categories lists them first, each opens its rows. A page row is one line, its name left and its value right, drawn
+// as copies of a stock row's text; the stock menu screen keeps the cursor, so the rows look and sound as the game's own.
 
 using namespace kernel;
 using app::rows::Kind;
@@ -56,8 +58,10 @@ constexpr uint32_t kObjects = 0x8375E4;
 constexpr uint32_t kObjectCount = 0x8375E8;
 
 // Apt text field render data, made at 0x413D80 and drawn by kDrawField
-constexpr uint32_t kFieldLeft = 0x04;  // the box, floats in the field's own space
+constexpr uint32_t kFieldLeft = 0x04;  // the box: left, top, right, bottom, floats in the field's own space
+constexpr uint32_t kFieldTop = 0x08;
 constexpr uint32_t kFieldRight = 0x0C;
+constexpr uint32_t kFieldBottom = 0x10;
 constexpr uint32_t kFieldAlign = 0x14;   // 0 left, 1 right, 2 centred
 constexpr uint32_t kFieldColour = 0x2C;  // ARGB
 constexpr uint32_t kFieldRaw = 0x54;     // the text as the movie sets it, "$ID" for a string table entry
@@ -69,7 +73,9 @@ constexpr uint32_t kAlignRight = 1;
 
 // Apt renderer while a character draws: +4 its matrix, translation in screen pixels (y down) at +0x30 and +0x34
 constexpr uint32_t kRenderer = 0x8375FC;
-constexpr uint32_t kRendererMatrix = 4;
+constexpr uint32_t kRendererMatrix = 4;  // 4x4, row major
+constexpr uint32_t kMatrixScaleX = 0x00;
+constexpr uint32_t kMatrixScaleY = 0x14;
 constexpr uint32_t kMatrixX = 0x30;
 constexpr uint32_t kMatrixY = 0x34;
 // colour transform of the drawn character: four multipliers, four offsets
@@ -117,6 +123,19 @@ constexpr int kForgetFrames = 15;  // a menu not drawn this many frames is close
 constexpr uint32_t kTextBytes = 128;
 constexpr int kMaxFields = 4;     // text fields of one part of a row, shadows included
 constexpr float kWiden = 3.0f;    // a copy's box grows by this many of its widths, so a long text keeps one line
+
+// a page row: its name and value span the options panel's column, in screen pixels, at a smaller text
+constexpr float kColumnHalf = 150.0f;
+constexpr float kPageTextScale = 0.75f;
+constexpr int kStageWidth = 640;  // the screen the Flash stage is drawn across
+constexpr int kStageHeight = 480;
+constexpr uint32_t kStageWidthNow = 0x7626E8;  // float: the stage's own size
+constexpr uint32_t kStageHeightNow = 0x7626EC;
+
+// on a page the pause menu's rows drop what they hold besides their labels: the value boxes and arrows
+const char* const kOptionsPanel = "options_mc";
+constexpr int kMaxPanelLevels = 8;
+constexpr int kLabelLevels = 3;  // how deep a row's clip may keep its label
 
 enum Part { kLabel, kValue, kPartCount };
 
@@ -176,6 +195,15 @@ struct State {
     Repeat repeat;
     int missing = 0;  // frames the menu was not drawn
     bool direct = false;  // the page opened from a pause tab, its back leaves the menu
+    const Row* section = nullptr;  // the category open, null for the page's list of them
+    std::vector<const Row*> rows;  // the page's rows on show; null restores the page's defaults
+};
+
+// where a page's lines are hit, from the last one drawn: screen pixels
+struct Lines {
+    float middle_x = 0.0f;
+    float middle_dy = 0.0f;  // the text's middle below its line's place
+    bool seen = false;
 };
 
 // all on the game thread
@@ -186,6 +214,7 @@ std::array<std::array<int, kPartCount>, kMaxRows> g_order{};
 Look g_looks[kPartCount][2][kMaxFields];
 bool g_copying = false;
 int g_tab_page = -1;  // the page a pause tab asked for, opened once its menu shows
+Lines g_lines;
 
 bool PageOpen() { return g_state.page >= 0; }
 
@@ -203,30 +232,57 @@ Place SlotPlace(int slot) { return g_layout.row[size_t(std::clamp(slot, 0, g_lay
 
 bool ListScrolled() { return !PageOpen() && g_state.list_top > 0; }
 
+// a page's lines are spread evenly over the stock rows' height
+float LineY(int slot) {
+    float first = SlotPlace(0).y;
+    float last = SlotPlace(Slots() - 1).y;
+    return Slots() > 1 ? first + (last - first) * float(slot) / float(Slots() - 1) : first;
+}
+
 // Pages.
 
-// the page's rows without headings; one more row after them restores the defaults
-const std::vector<const Row*>& PageRows(int page) {
-    static std::vector<const Row*> lists[kEntryCount];
-    std::vector<const Row*>& list = lists[page];
-    if (!list.empty()) return list;
+// the page's categories, its headings, when it has more than one
+std::vector<const Row*> Categories(int page) {
     size_t count = 0;
     const Row* rows = app::rows::Page(page, &count);
+    std::vector<const Row*> list;
     for (size_t i = 0; i < count; i++) {
-        if (rows[i].kind != Kind::Heading) list.push_back(&rows[i]);
+        if (rows[i].kind == Kind::Heading) list.push_back(&rows[i]);
     }
+    if (list.size() < 2) list.clear();
     return list;
 }
 
-int PageRowCount() { return int(PageRows(g_state.page).size()) + 1; }
+// the categories, or the open category's rows; the defaults row ends the page's first list
+void FillRows() {
+    std::vector<const Row*>& list = g_state.rows;
+    list = Categories(g_state.page);
+    if (!list.empty() && !g_state.section) {
+        list.push_back(nullptr);
+        return;
+    }
+    list.clear();
+    size_t count = 0;
+    const Row* rows = app::rows::Page(g_state.page, &count);
+    bool inside = !g_state.section;
+    for (size_t i = 0; i < count; i++) {
+        bool heading = rows[i].kind == Kind::Heading;
+        if (heading && g_state.section) inside = &rows[i] == g_state.section;
+        if (!heading && inside) list.push_back(&rows[i]);
+    }
+    if (!g_state.section) list.push_back(nullptr);
+}
+
+int PageRowCount() { return int(g_state.rows.size()); }
 
 // the slots the page shows at once, the screen's rows
 int PageSlots() { return std::min(PageRowCount(), Slots()); }
 
-const Row* PageRow(int index) {
-    const std::vector<const Row*>& rows = PageRows(g_state.page);
-    return index >= 0 && index < int(rows.size()) ? rows[size_t(index)] : nullptr;
-}
+bool HasRow(int index) { return index >= 0 && index < PageRowCount(); }
+
+const Row* PageRow(int index) { return HasRow(index) ? g_state.rows[size_t(index)] : nullptr; }
+
+int FocusedRow() { return g_state.top + CursorIndex(); }
 
 }  // namespace
 
@@ -261,13 +317,14 @@ std::string MenuText(std::string_view english, bool caps) {
 namespace {
 
 std::string RowLabel(int index) {
+    if (!HasRow(index)) return std::string();
     const Row* row = PageRow(index);
     return MenuText(row ? row->label : kDefaultsLabel);
 }
 
 std::string RowValue(int index) {
     const Row* row = PageRow(index);
-    if (!row) return std::string();
+    if (!row || row->kind == Kind::Heading) return std::string();
     std::string value = app::rows::Value(*row);
     // key names as they are
     bool bound = row->kind == Kind::Bind || row->kind == Kind::PadBind;
@@ -287,26 +344,60 @@ void SetRows(int rows) {
     W32(g_state.screen + kScreenCount, uint32_t(rows));
 }
 
-// as the screen's own input moves it: OnDeselect and OnSelect follow
+// as the screen's own input moves it: OnDeselect and OnSelect follow, and their sound when the cursor stays
 void MoveCursor(X86Context& ctx, int index) {
+    if (index == CursorIndex()) return ReselectRow(ctx, g_state.screen);
     W32(g_state.screen + kScreenRow, uint32_t(index));
     W32(g_state.screen + kScreenColumn, 0);
     ctx.ecx = g_state.screen;
     CallGuest(ctx, kScreenSelect, {});
 }
 
+// the page's rows made again, the cursor on the row given
+void ShowRows(X86Context& ctx, int focus) {
+    FillRows();
+    int slots = PageSlots();
+    focus = std::clamp(focus, 0, PageRowCount() - 1);
+    g_state.top = std::min(focus, PageRowCount() - slots);
+    SetRows(slots);
+    MoveCursor(ctx, focus - g_state.top);
+}
+
 void OpenPage(X86Context& ctx, int page) {
     g_state.page = page;
-    g_state.top = 0;
-    SetRows(PageSlots());
-    MoveCursor(ctx, 0);
+    g_state.section = nullptr;
+    ShowRows(ctx, 0);
+}
+
+void OpenSection(X86Context& ctx, const Row* heading) {
+    g_state.section = heading;
+    ShowRows(ctx, 0);
+}
+
+// back on the categories, the cursor on the one left
+void CloseSection(X86Context& ctx) {
+    const Row* left = g_state.section;
+    g_state.section = nullptr;
+    FillRows();
+    auto at = std::find(g_state.rows.begin(), g_state.rows.end(), left);
+    ShowRows(ctx, int(at - g_state.rows.begin()));
 }
 
 void ClosePage(X86Context& ctx) {
     int entry = g_state.page;
     g_state.page = -1;
+    g_state.rows.clear();
     SetRows(g_layout.stock + EntryCount());
     MoveCursor(ctx, g_layout.stock + entry);
+}
+
+// a page a pause tab opened goes as the screen's own back leaves it
+void LeavePage() {
+    g_state.page = -1;
+    g_state.section = nullptr;
+    g_state.direct = false;
+    g_state.rows.clear();
+    SetRows(g_layout.stock + EntryCount());
 }
 
 // up and down move the cursor over the slots and scroll the page at their ends
@@ -316,8 +407,10 @@ void MovePageCursor(X86Context& ctx, int step) {
     int slot = CursorIndex() + step;
     if (slot < 0 && g_state.top > 0) {
         g_state.top--;
+        MoveCursor(ctx, 0);
     } else if (slot >= slots && g_state.top < last_top) {
         g_state.top++;
+        MoveCursor(ctx, slots - 1);
     } else if (slot < 0) {
         g_state.top = last_top;
         MoveCursor(ctx, slots - 1);
@@ -329,19 +422,24 @@ void MovePageCursor(X86Context& ctx, int step) {
     }
 }
 
-void StepRow(int step) {
-    const Row* row = PageRow(g_state.top + CursorIndex());
-    if (row && row->kind == Kind::Value) app::rows::Value(*row, step);
+void StepRow(X86Context& ctx, int step) {
+    const Row* row = PageRow(FocusedRow());
+    if (!row || row->kind != Kind::Value) return;
+    app::rows::Value(*row, step);
+    ReselectRow(ctx, g_state.screen);
 }
 
 // Delete on a binding row
 void UnbindFocusedRow() {
-    const Row* row = PageRow(g_state.top + CursorIndex());
+    const Row* row = PageRow(FocusedRow());
     if (row && row->kind == Kind::Bind) input::Unbind(size_t(row->id));
 }
 
-void ActivateRow() {
-    const Row* row = PageRow(g_state.top + CursorIndex());
+void ActivateRow(X86Context& ctx) {
+    int index = FocusedRow();
+    const Row* row = PageRow(index);
+    if (!HasRow(index)) return;
+    if (row && row->kind == Kind::Heading) return OpenSection(ctx, row);
     if (!row) {
         app::rows::Defaults(g_state.page);
     } else if (row->kind == Kind::Value) {
@@ -349,6 +447,21 @@ void ActivateRow() {
     } else {
         app::rows::Bind(*row);
     }
+    ReselectRow(ctx, g_state.screen);
+}
+
+// back: a category goes back to the page's list, a page to the menu's own list
+bool TakeBack(X86Context& ctx) {
+    if (g_state.section) {
+        CloseSection(ctx);
+        return true;
+    }
+    if (g_state.direct) {
+        LeavePage();
+        return false;
+    }
+    ClosePage(ctx);
+    return true;
 }
 
 // a direction on a page, pressed or repeating
@@ -356,7 +469,7 @@ bool TakeDirection(X86Context& ctx, uint32_t code) {
     if (code == kButtonUp || code == kButtonDown) {
         MovePageCursor(ctx, code == kButtonUp ? -1 : 1);
     } else if (code == kButtonLeft || code == kButtonRight) {
-        StepRow(code == kButtonLeft ? -1 : 1);
+        StepRow(ctx, code == kButtonLeft ? -1 : 1);
     } else {
         return false;
     }
@@ -365,13 +478,9 @@ bool TakeDirection(X86Context& ctx, uint32_t code) {
 
 // a button on a page: the page keeps every button the screen would act on
 bool TakePageButton(X86Context& ctx, uint32_t code) {
-    if (code == R32(g_state.screen + kScreenCancel) && g_state.direct) return false;
-    if (code == R32(g_state.screen + kScreenCancel)) {
-        ClosePage(ctx);
-        return true;
-    }
+    if (code == R32(g_state.screen + kScreenCancel)) return TakeBack(ctx);
     if (code == R32(g_state.screen + kScreenAccept)) {
-        ActivateRow();
+        ActivateRow(ctx);
         return true;
     }
     if (!TakeDirection(ctx, code)) return false;
@@ -590,29 +699,24 @@ std::optional<Field> Observe(uint32_t data, Place place) {
 
 // Drawing copies of a stock row.
 
-// what a copy shows and where
-struct Copy {
-    std::string text;
-    int slot;
-    bool active;
-};
-
-// moves the drawn character for one draw
+// moves and scales the drawn character for one draw
 class MatrixShift {
 public:
-    explicit MatrixShift(Place by) : matrix_(R32(R32(kRenderer) + kRendererMatrix)) {
-        saved_ = {G<float>(matrix_ + kMatrixX), G<float>(matrix_ + kMatrixY)};
-        G<float>(matrix_ + kMatrixX) = saved_.x + by.x;
-        G<float>(matrix_ + kMatrixY) = saved_.y + by.y;
+    MatrixShift(Place by, float scale) : matrix_(R32(R32(kRenderer) + kRendererMatrix)) {
+        for (size_t i = 0; i < kSaved.size(); i++) saved_[i] = G<float>(matrix_ + kSaved[i]);
+        G<float>(matrix_ + kMatrixX) += by.x;
+        G<float>(matrix_ + kMatrixY) += by.y;
+        G<float>(matrix_ + kMatrixScaleX) *= scale;
+        G<float>(matrix_ + kMatrixScaleY) *= scale;
     }
     ~MatrixShift() {
-        G<float>(matrix_ + kMatrixX) = saved_.x;
-        G<float>(matrix_ + kMatrixY) = saved_.y;
+        for (size_t i = 0; i < kSaved.size(); i++) G<float>(matrix_ + kSaved[i]) = saved_[i];
     }
 
 private:
+    static constexpr std::array<uint32_t, 4> kSaved = {kMatrixX, kMatrixY, kMatrixScaleX, kMatrixScaleY};
     uint32_t matrix_;
-    Place saved_;
+    std::array<float, 4> saved_{};
 };
 
 // sets the colour transform for one draw
@@ -641,6 +745,15 @@ void WriteText(uint32_t at, const std::string& text) {
     G<char>(at + uint32_t(size)) = 0;
 }
 
+// the field's render data with another text
+uint32_t CopyField(uint32_t field, const std::string& text) {
+    static const uint32_t data = mem::AllocSystem(kFieldBytes + kTextBytes);
+    std::memcpy(HostPtr(data), HostPtr(field), kFieldBytes);
+    WriteText(data + kFieldBytes, text);
+    W32(data + kFieldShown, data + kFieldBytes);
+    return data;
+}
+
 // the box grows away from the side the text keeps to
 void Widen(uint32_t data) {
     float& left = G<float>(data + kFieldLeft);
@@ -653,10 +766,7 @@ void Widen(uint32_t data) {
 
 // the field drawn with another text, its box widened so the text keeps one line
 void DrawRelabelled(X86Context& ctx, uint32_t field, const std::string& text) {
-    static const uint32_t data = mem::AllocSystem(kFieldBytes + kTextBytes);
-    std::memcpy(HostPtr(data), HostPtr(field), kFieldBytes);
-    WriteText(data + kFieldBytes, text);
-    W32(data + kFieldShown, data + kFieldBytes);
+    uint32_t data = CopyField(field, text);
     Widen(data);
     X86Context saved = ctx;
     g_copying = true;
@@ -665,21 +775,12 @@ void DrawRelabelled(X86Context& ctx, uint32_t field, const std::string& text) {
     ctx = saved;
 }
 
-// a copy of the field being drawn, with its own text, look and place
-void DrawCopy(X86Context& ctx, uint32_t field, const Field& seen, const Copy& copy) {
-    static const uint32_t data = mem::AllocSystem(kFieldBytes + kTextBytes);
-    if (copy.text.empty() || seen.order >= kMaxFields) return;
-    uint32_t text = data + kFieldBytes;
-    std::memcpy(HostPtr(data), HostPtr(field), kFieldBytes);
-    WriteText(text, copy.text);
-    W32(data + kFieldShown, text);
-    Widen(data);
-    const Look& look = g_looks[seen.part][copy.active][seen.order];
+// a copy in the look of the stock row's field, active or not, moved and scaled
+void DrawCopy(X86Context& ctx, uint32_t data, const Field& seen, bool active, Place by, float scale) {
+    const Look& look = g_looks[seen.part][active][seen.order];
     if (look.seen) W32(data + kFieldColour, look.colour);
     CxformSwap swap(look);
-    Place to = SlotPlace(copy.slot);
-    Place from = g_layout.row[size_t(seen.row)];
-    MatrixShift shift({0.0f, to.y - from.y});  // the rows share a column, centred texts keep their own x
+    MatrixShift shift(by, scale);
     g_copying = true;
     CallGuest(ctx, kDrawField, {data, 0});
     g_copying = false;
@@ -695,35 +796,88 @@ void DrawList(X86Context& ctx, uint32_t field, const Field& seen) {
     int index = CursorIndex();
     for (int slot = 0; slot < Slots(); slot++) {
         int row = g_state.list_top + slot;
-        DrawCopy(ctx, field, seen, {ListText(row, seen.part), slot, index == row});
+        std::string text = ListText(row, seen.part);
+        if (text.empty()) continue;
+        uint32_t data = CopyField(field, text);
+        Widen(data);
+        // the rows share a column, centred texts keep their own x
+        Place by{0.0f, SlotPlace(slot).y - g_layout.row[size_t(seen.row)].y};
+        DrawCopy(ctx, data, seen, index == row, by, 1.0f);
     }
 }
 
-// the value in the slot's own value box where the stock row there has one, else after the label
-std::string PageText(int row, int slot, Part part) {
-    bool box = !g_layout.text[size_t(slot)][kValue].empty();
-    std::string value = RowValue(row);
-    if (part == kValue) return box ? value : "";
-    std::string label = RowLabel(row);
-    if (box || value.empty()) return label;
-    return label + ": " + value;
+float Middle(uint32_t data, uint32_t low, uint32_t high) { return (G<float>(data + low) + G<float>(data + high)) / 2; }
+
+float MatrixValue(uint32_t offset) { return G<float>(R32(R32(kRenderer) + kRendererMatrix) + offset); }
+
+// one side of a page line: the box spans the column, the text scaled about its middle so the line keeps its place
+void DrawLineSide(X86Context& ctx, uint32_t field, const Field& seen, const std::string& text, int slot, bool active,
+                  uint32_t align) {
+    float scale_x = MatrixValue(kMatrixScaleX);
+    float scale_y = MatrixValue(kMatrixScaleY);
+    if (text.empty() || !(scale_x > 0.0f)) return;
+    uint32_t data = CopyField(field, text);
+    float middle_x = Middle(data, kFieldLeft, kFieldRight);
+    float middle_y = Middle(data, kFieldTop, kFieldBottom);
+    float half = kColumnHalf / (scale_x * kPageTextScale);
+    G<float>(data + kFieldLeft) = middle_x - half;
+    G<float>(data + kFieldRight) = middle_x + half;
+    W32(data + kFieldAlign, align);
+    float kept = 1.0f - kPageTextScale;
+    float line_dy = LineY(slot) - g_layout.row[size_t(seen.row)].y;
+    Place by{middle_x * scale_x * kept, line_dy + middle_y * scale_y * kept};
+    DrawCopy(ctx, data, seen, active, by, kPageTextScale);
+}
+
+// where the lines are, for the mouse
+void LatchLines(uint32_t field) {
+    float middle_x = Middle(field, kFieldLeft, kFieldRight);
+    float middle_y = Middle(field, kFieldTop, kFieldBottom);
+    g_lines.middle_x = MatrixValue(kMatrixX) + middle_x * MatrixValue(kMatrixScaleX);
+    g_lines.middle_dy = middle_y * MatrixValue(kMatrixScaleY);
+    g_lines.seen = true;
 }
 
 void DrawPage(X86Context& ctx, uint32_t field, const Field& seen) {
+    if (seen.part != kLabel) return;
     int index = CursorIndex();
     for (int slot = 0; slot < PageSlots(); slot++) {
-        std::string text = PageText(g_state.top + slot, slot, seen.part);
-        DrawCopy(ctx, field, seen, {text, slot, index == slot});
+        int row = g_state.top + slot;
+        bool active = index == slot;
+        DrawLineSide(ctx, field, seen, RowLabel(row), slot, active, kAlignLeft);
+        DrawLineSide(ctx, field, seen, RowValue(row), slot, active, kAlignRight);
     }
+    if (seen.order == 0) LatchLines(field);
 }
 
 void DrawCopies(X86Context& ctx, uint32_t field, const Field& seen) {
-    if (!g_state.screen || seen.row != SourceRow()) return;
+    if (!g_state.screen || seen.row != SourceRow() || seen.order >= kMaxFields) return;
     if (PageOpen()) {
         DrawPage(ctx, field, seen);
     } else if (ListScrolled()) {
         DrawList(ctx, field, seen);
     }
+}
+
+// Hiding what a stock row holds besides its label.
+
+bool IsNamed(uint32_t clip, const char* name) {
+    uint32_t text = R32(clip + flash::kClipName);
+    return flash::Readable(text) && _stricmp(flash::Text(text + flash::kStringText), name) == 0;
+}
+
+// a stock label field in the clip or below it
+bool HoldsLabel(uint32_t clip, int levels) {
+    if (uint32_t field = flash::EditTextField(clip)) {
+        uint32_t raw = R32(field + kFieldRaw);
+        int menu = -1;
+        return flash::Readable(raw) && LabelIndex(flash::Text(raw), &menu) >= 0;
+    }
+    if (levels == 0) return false;
+    for (uint32_t child : flash::Children(clip)) {
+        if (HoldsLabel(child, levels - 1)) return true;
+    }
+    return false;
 }
 
 }  // namespace
@@ -760,6 +914,33 @@ void OptionsMenuFocus(X86Context& ctx) {
     OpenPage(ctx, g_tab_page);
     g_state.direct = true;
     g_tab_page = -1;
+}
+
+// on a page: a clip inside a pause menu row that holds no label, its value box or arrows
+bool HideOptionsClip(uint32_t clip) {
+    if (!PageOpen() || flash::Type(clip) == flash::kTypeEditText) return false;
+    uint32_t parent = R32(clip + flash::kClipParent);
+    for (int level = 0; flash::Readable(parent) && level < kMaxPanelLevels; level++) {
+        // a row is the panel's child, what it holds is two levels under the panel
+        if (level > 0 && IsNamed(parent, kOptionsPanel)) return !HoldsLabel(clip, kLabelLevels);
+        parent = R32(parent + flash::kClipParent);
+    }
+    return false;
+}
+
+std::optional<int> OptionsMenuRowAt(uint32_t screen, float stage_x, float stage_y) {
+    if (!PageOpen() || screen != g_state.screen || !g_lines.seen) return std::nullopt;
+    float width = G<float>(kStageWidthNow);
+    float height = G<float>(kStageHeightNow);
+    if (!(width > 0.0f) || !(height > 0.0f)) return -1;
+    float x = stage_x * kStageWidth / width;
+    float y = stage_y * kStageHeight / height;
+    if (std::fabs(x - g_lines.middle_x) > kColumnHalf) return -1;
+    float step = Slots() > 1 ? std::fabs(LineY(1) - LineY(0)) : kColumnHalf;
+    for (int slot = 0; slot < PageSlots(); slot++) {
+        if (std::fabs(y - LineY(slot) - g_lines.middle_dy) <= step / 2) return slot;
+    }
+    return -1;
 }
 
 // the Apt text field draw, cdecl (field, unused): a page hides the stock rows and draws its own
