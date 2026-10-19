@@ -35,6 +35,20 @@ constexpr uint32_t kLaserWatchName = 0x7261FC;  // "LaserWatch": a gun too, left
 // the throw state's own pointer to the player
 constexpr uint32_t kStatePlayer = 0x4C;
 
+// the throw state's action dispatch 0x13E0D0, thiscall: the frame seconds and the action from esp
+constexpr uint32_t kActionSeconds = 8;
+constexpr uint32_t kActionId = 0x10;
+constexpr uint32_t kActionArgs = 5;
+constexpr uint32_t kActionRootMotion = 9;  // the firing state's update: the animation's root motion alone
+constexpr uint32_t kAimUpdate = 0x14052;    // thiscall on the state (seconds): turn, pitch, aim point, root motion
+
+// the fire button as the gun fire check 0x138290 reads it
+constexpr uint32_t kGunSingleShot = 0x160;     // gun vtable slot, thiscall: a press a shot, else fires while held
+constexpr uint32_t kPlayerInput = 0xAC0;       // its vtable +4 gives the port actions are read on
+constexpr uint32_t kInputManager = 0x77F5BC;
+constexpr uint32_t kActionPressed = 0x34DEC0;  // thiscall on the manager (port, action)
+constexpr uint32_t kFireAction = 0xFF68BD8B;
+
 uint32_t g_player = 0;  // in the throw state through free aim
 uint32_t g_frame = 0;
 
@@ -61,6 +75,23 @@ bool FreeAimGun(X86Context& ctx, uint32_t player, uint32_t gun) {
 
 bool InFreeAim(uint32_t player) { return player && player == g_player && R32(kFrameCount) - g_frame <= 1; }
 
+uint32_t CurrentGun(X86Context& ctx, uint32_t player) {
+    ctx.ecx = player;
+    return CallGuest(ctx, kCurrentGun, {});
+}
+
+bool SingleShot(X86Context& ctx, uint32_t gun) {
+    ctx.ecx = gun;
+    return (CallGuest(ctx, R32(R32(gun) + kGunSingleShot), {}) & 0xFF) != 0;
+}
+
+bool FirePressed(X86Context& ctx, uint32_t player) {
+    ctx.ecx = player + kPlayerInput;
+    uint32_t port = CallGuest(ctx, R32(R32(player + kPlayerInput) + 4), {});
+    ctx.ecx = R32(kInputManager);
+    return (CallGuest(ctx, kActionPressed, {port, kFireAction}) & 0xFF) != 0;
+}
+
 }  // namespace
 
 // throw state check, cdecl(player, item in hand): in, and staying in, while aim is held
@@ -79,21 +110,40 @@ X86_FUNC(sub_00015CA4) {
     g_frame = R32(kFrameCount);
 }
 
-// throw state fire check, thiscall on the state: the gun fires there as the rocket launcher does
+// throw state fire check, thiscall on the state: the gun fires there as the rocket launcher does. The check reads
+// fire as held, so a single shot gun also needs a fresh press, as its own fire check asks
 X86_EXTERN_FUNC(__imp__sub_0001F3F3);
 X86_FUNC(sub_0001F3F3) {
     uint32_t state = ctx.ecx;
     uint32_t player = R32(state + kStatePlayer);
-    uint32_t gun = 0;
-    if (InFreeAim(player)) {
-        ctx.ecx = player;
-        gun = CallGuest(ctx, kCurrentGun, {});
-    }
+    uint32_t gun = InFreeAim(player) ? CurrentGun(ctx, player) : 0;
     uint32_t kind = gun ? R32(gun + kGunKind) : 0;
     if (gun) W32(gun + kGunKind, kKindRocketLauncher);
     ctx.ecx = state;
     __imp__sub_0001F3F3(ctx, base);
-    if (gun) W32(gun + kGunKind, kind);
+    if (!gun) return;
+    W32(gun + kGunKind, kind);
+    uint32_t fires = ctx.eax;
+    if ((fires & 0xFF) && SingleShot(ctx, gun) && !FirePressed(ctx, player)) fires = 0;
+    ctx.eax = fires;
+}
+
+// throw state action dispatch: each shot puts a free aim gun through the firing state, whose update has no aim, so
+// the view stood still while firing. There the aim update runs instead; it runs the root motion too
+X86_EXTERN_FUNC(__imp__sub_000137C9);
+X86_FUNC(sub_000137C9) {
+    uint32_t state = ctx.ecx;
+    uint32_t player = R32(state + kStatePlayer);
+    bool root_motion = R32(ctx.esp + kActionId) == kActionRootMotion;
+    if (!root_motion || !FreeAimGun(ctx, player, CurrentGun(ctx, player))) {
+        ctx.ecx = state;
+        __imp__sub_000137C9(ctx, base);
+        return;
+    }
+    ctx.ecx = state;
+    CallGuest(ctx, kAimUpdate, {R32(ctx.esp + kActionSeconds)});
+    // the root motion action answers 0
+    Return(ctx, 0, kActionArgs);
 }
 
 // gun fire frame, thiscall(frame, normalise) on the gun: free aim shots go at the aim point
