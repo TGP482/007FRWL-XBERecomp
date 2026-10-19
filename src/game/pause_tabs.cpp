@@ -23,10 +23,10 @@ constexpr uint32_t kScreenRow = 0xC4;
 constexpr uint32_t kScreenIndex = 0xC8;
 constexpr uint32_t kScreenAccept = 0xCC;
 constexpr uint32_t kScreenSelect = 0x1C847;  // thiscall: OnSelect of the row set
-constexpr uint32_t kButtonUp = 2;
-constexpr uint32_t kButtonDown = 3;
-constexpr uint32_t kButtonLeft = 4;
-constexpr uint32_t kButtonRight = 5;
+constexpr uint32_t kButtonLeft = 2;
+constexpr uint32_t kButtonRight = 3;
+constexpr uint32_t kButtonUp = 4;
+constexpr uint32_t kButtonDown = 5;
 
 // the page's tab plates and their labels, top to bottom; the focused plate is red
 constexpr int kPlateDepths[kStockTabs] = {124, 85, 46, 7};
@@ -51,11 +51,13 @@ struct Column {
 struct Tabs {
     uint32_t screen = 0;
     int tab = 0;  // the focused tab, past the last stock one on a recomp tab
+    bool moved = false;  // the cursor went to another recomp tab: its sound plays in the pad's turn
 };
 
 Tabs g_tabs;
 const char* g_label = nullptr;
 bool g_drawing = false;
+bool g_column = false;  // a stock tab of the column draws
 
 bool IsTabScreen(uint32_t screen) {
     return screen && R32(screen) == kMenuScreenVtable && R32(screen + kScreenCount) == kStockTabs;
@@ -146,7 +148,9 @@ void DrawChild(X86Context& ctx, uint8_t* base, Draw original, uint32_t draw) {
         Return(ctx, 0, 0);
         return;
     }
+    g_column = true;
     original(ctx, base);
+    g_column = false;
     if (args[1] != column.labels[0]) return;
     X86Context saved = ctx;
     DrawExtraTabs(ctx, draw, args, column, stock);
@@ -165,6 +169,7 @@ bool Step(X86Context& ctx, int step) {
     int tab = g_tabs.tab + step;
     if (tab >= kLastTab && tab < kTabCount && g_tabs.tab >= kLastTab) {
         g_tabs.tab = tab;
+        ReselectRow(ctx, g_tabs.screen);
         return true;
     }
     if (tab == kTabCount || tab < 0) {
@@ -185,7 +190,16 @@ void UpdatePauseTabs(uint32_t screen) {
 }
 
 void PointPauseTab(int tab) {
-    if (tab >= 0 && tab < kTabCount) g_tabs.tab = tab;
+    if (tab < 0 || tab >= kTabCount) return;
+    // between recomp tabs the stock screen does not move, so it plays no sound itself
+    g_tabs.moved = g_tabs.moved || (tab != g_tabs.tab && tab >= kLastTab && g_tabs.tab >= kLastTab);
+    g_tabs.tab = tab;
+}
+
+void PauseTabsFocus(X86Context& ctx) {
+    if (!g_tabs.moved) return;
+    g_tabs.moved = false;
+    if (IsTabScreen(g_tabs.screen)) ReselectRow(ctx, g_tabs.screen);
 }
 
 bool TakePauseTabButton(X86Context& ctx, uint32_t screen, uint32_t code) {
@@ -207,6 +221,8 @@ bool HoldPauseTabButton(uint32_t screen) {
 }
 
 const char* PauseTabLabel() { return g_label; }
+
+bool DrawingPauseTab() { return g_column; }
 
 // both of the player's child draws: the tab column's clips draw the recomp's tabs with them, the attache case's
 // buttons their keys

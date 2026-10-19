@@ -10,6 +10,8 @@ constexpr int kExtraTabs = 3;
 
 void UpdatePauseTabs(uint32_t screen);  // each frame: the pause menu's tab screen while it takes input, else 0
 void PointPauseTab(int tab);            // the cursor is on a tab
+void PauseTabsFocus(X86Context& ctx);   // in the pad's turn
 bool TakePauseTabButton(X86Context& ctx, uint32_t screen, uint32_t code);
 bool HoldPauseTabButton(uint32_t screen);  // a held direction does not repeat past the stock tabs
 const char* PauseTabLabel();  // the text a field drawn now shows instead of its own, else null
+bool DrawingPauseTab();       // a stock tab of the column draws now

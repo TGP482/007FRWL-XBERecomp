@@ -771,6 +771,7 @@ void MenuCursor(X86Context& ctx, uint8_t*) {
 void MenuCursorFocus(X86Context& ctx, uint8_t*) {
     X86Context saved = ctx;
     ApplyPending(ctx);
+    PauseTabsFocus(ctx);
     OptionsMenuFocus(ctx);
     ctx = saved;
 }

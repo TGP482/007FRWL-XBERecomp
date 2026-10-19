@@ -41,12 +41,15 @@ constexpr uint32_t kScreenAccept = 0xCC;  // the button code that activates a ro
 constexpr uint32_t kScreenCancel = 0xD0;
 constexpr uint32_t kScreenBlocked = 0xDC;    // BlockInput
 constexpr uint32_t kScreenSelect = 0x1C847;  // thiscall: wraps the row and column into the index, then OnSelect
+constexpr uint32_t kScreenScript = 0x88;      // the page script's handler
+constexpr uint32_t kScriptOnSelect = 0x08;    // vtable slots, thiscall (index)
+constexpr uint32_t kScriptOnDeselect = 0x0C;
 
-// button codes the screens get: the row goes up and down, the column left and right
-constexpr uint32_t kButtonUp = 2;
-constexpr uint32_t kButtonDown = 3;
-constexpr uint32_t kButtonLeft = 4;
-constexpr uint32_t kButtonRight = 5;
+// button codes the screens get (switch at 0x1C57D8): the column goes left and right, the row up and down
+constexpr uint32_t kButtonLeft = 2;
+constexpr uint32_t kButtonRight = 3;
+constexpr uint32_t kButtonUp = 4;
+constexpr uint32_t kButtonDown = 5;
 
 // every live UI object, the menu screens among them
 constexpr uint32_t kObjects = 0x8375E4;
@@ -227,6 +230,17 @@ const Row* PageRow(int index) {
 
 }  // namespace
 
+// the script deselects and selects the focused row again, as a move does, with its sound
+void ReselectRow(X86Context& ctx, uint32_t screen) {
+    uint32_t script = R32(screen + kScreenScript);
+    if (!script || R32(screen + kScreenTakesInput) != 1) return;
+    uint32_t index = R32(screen + kScreenIndex);
+    for (uint32_t slot : {kScriptOnDeselect, kScriptOnSelect}) {
+        ctx.ecx = script;
+        CallGuest(ctx, R32(R32(script) + slot), {index});
+    }
+}
+
 // the translations are all Latin 1, two UTF-8 bytes at most
 std::string MenuText(std::string_view english, bool caps) {
     std::string utf8 = app::Ui(english, caps);
@@ -395,7 +409,7 @@ bool TakeHeldButton(X86Context& ctx, uint32_t screen, uint32_t code) {
     if (!OwnsScreen(screen) || !PageOpen()) return false;
     if (app::Capturing()) return true;
     Repeat& repeat = g_state.repeat;
-    bool direction = code >= kButtonUp && code <= kButtonRight;
+    bool direction = code >= kButtonLeft && code <= kButtonDown;
     if (!direction) return false;
     if (code != repeat.code) return true;
     repeat.wait -= G<float>(kFrameSeconds);
@@ -760,7 +774,7 @@ static void DrawField(X86Context& ctx, uint8_t* base) {
     }
     Place place = DrawnPlace();
     std::optional<Field> seen = Observe(data, place);
-    if ((PageOpen() || ListScrolled()) && InRows(place)) {
+    if ((PageOpen() || ListScrolled()) && !DrawingPauseTab() && InRows(place)) {
         Return(ctx, 0, 0);
     } else {
         __imp__sub_00413E50(ctx, base);
