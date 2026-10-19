@@ -129,7 +129,7 @@ constexpr float kWiden = 3.0f;    // a copy's box grows by this many of its widt
 
 // a page row: its name and value span the options panel's column, in screen pixels, at a smaller text
 constexpr float kColumnHalf = 160.0f;
-constexpr float kPageTextScale = 0.75f;
+constexpr float kPageTextScale = 0.7f;
 constexpr int kStageWidth = 640;  // the screen the Flash stage is drawn across
 constexpr int kStageHeight = 480;
 constexpr uint32_t kStageWidthNow = 0x7626E8;  // float: the stage's own size
@@ -137,6 +137,7 @@ constexpr uint32_t kStageHeightNow = 0x7626EC;
 
 // on a page the pause menu's rows drop what they hold besides their labels: the value boxes and arrows
 const char* const kOptionsPanel = "options_mc";
+constexpr int kMinLines = 9;
 constexpr int kMaxPanelLevels = 8;
 constexpr int kLabelLevels = 3;  // how deep a row's clip may keep its label
 
@@ -221,6 +222,9 @@ int CursorIndex() { return g_state.screen ? int(R32(g_state.screen + kScreenInde
 // rows show in the stock rows' places, scrolling past them
 int Slots() { return g_layout.stock; }
 
+// the front end's demo row is in another font
+bool Copyable(int row) { return g_layout.menu != kFrontEnd || row != g_layout.row_of[kNfsDemoLabel]; }
+
 // the stock rows' focus: the options screen keeps it while a recomp tab only shows its page
 int StockFocus() {
     uint32_t screen = g_state.screen ? g_state.screen : g_panel;
@@ -232,7 +236,7 @@ int StockFocus() {
 int SourceRow() {
     int best = -1;
     for (int row = 0; row < g_layout.stock; row++) {
-        if (row == StockFocus()) continue;
+        if (row == StockFocus() || !Copyable(row)) continue;
         if (best < 0 || g_changed[size_t(row)] < g_changed[size_t(best)]) best = row;
     }
     return std::max(best, 0);
@@ -245,15 +249,16 @@ Place DrawnPlace() {
 
 Place SlotPlace(int slot) { return g_layout.row[size_t(std::clamp(slot, 0, g_layout.stock - 1))]; }
 
-bool ListScrolled() { return !PageOpen() && g_state.list_top > 0; }
+// the pause menu's pages are its tabs
+int EntryCount() { return g_layout.menu == kPause ? 0 : kEntryCount; }
 
-// a page's lines are as far apart as the stock rows nearest each other
+// the front end's list is drawn as lines too, its entries after the stock rows
+bool ListShown() { return !PageOpen() && EntryCount() > 0; }
+
+// lines are as far apart as the stock rows nearest each other, and at least kMinLines fit the rows' height
 float LineStep() {
-    float step = 0.0f;
-    for (int row = 1; row < Slots(); row++) {
-        float gap = SlotPlace(row).y - SlotPlace(row - 1).y;
-        if (step == 0.0f || gap < step) step = gap;
-    }
+    float step = (SlotPlace(Slots() - 1).y - SlotPlace(0).y) / float(kMinLines - 1);
+    for (int row = 1; row < Slots(); row++) step = std::min(step, SlotPlace(row).y - SlotPlace(row - 1).y);
     return step;
 }
 
@@ -265,6 +270,8 @@ int LineSlots() {
 }
 
 float LineY(int slot) { return SlotPlace(0).y + LineStep() * float(slot); }
+
+int ListSlots() { return std::min(g_layout.stock + EntryCount(), LineSlots()); }
 
 // Pages.
 
@@ -361,8 +368,6 @@ std::string RowValue(const Row* row) {
 
 // The screen.
 
-// the pause menu's pages are its tabs
-int EntryCount() { return g_layout.menu == kPause ? 0 : kEntryCount; }
 
 int WantedRows() { return PageOpen() ? PageSlots() : g_layout.stock + EntryCount(); }
 
@@ -609,7 +614,7 @@ void UpdateListTop() {
     int& top = g_state.list_top;
     if (PageOpen() || index < 0) return;
     if (index < top) top = index;
-    if (index >= top + Slots()) top = index - Slots() + 1;
+    if (index >= top + ListSlots()) top = index - ListSlots() + 1;
 }
 
 void UpdateScreen() {
@@ -815,18 +820,21 @@ std::string ListText(int row, Part part) {
     return part == kLabel ? MenuText(kEntries[row - g_layout.stock]) : "";
 }
 
+void LatchLines(uint32_t field);
+
 void DrawList(X86Context& ctx, uint32_t field, const Field& seen) {
     int index = CursorIndex();
-    for (int slot = 0; slot < Slots(); slot++) {
+    for (int slot = 0; slot < ListSlots(); slot++) {
         int row = g_state.list_top + slot;
         std::string text = ListText(row, seen.part);
         if (text.empty()) continue;
         uint32_t data = CopyField(field, text);
         Widen(data);
         // the rows share a column, centred texts keep their own x
-        Place by{0.0f, SlotPlace(slot).y - g_layout.row[size_t(seen.row)].y};
+        Place by{0.0f, LineY(slot) - g_layout.row[size_t(seen.row)].y};
         DrawCopy(ctx, data, seen, index == row, by, 1.0f);
     }
+    if (seen.order == 0) LatchLines(field);
 }
 
 float Middle(uint32_t data, uint32_t low, uint32_t high) { return (G<float>(data + low) + G<float>(data + high)) / 2; }
@@ -883,7 +891,7 @@ void DrawCopies(X86Context& ctx, uint32_t field, const Field& seen) {
         return;
     } else if (PageOpen()) {
         DrawLines(ctx, field, seen, g_state.rows, g_state.top, CursorIndex());
-    } else if (ListScrolled()) {
+    } else if (ListShown()) {
         DrawList(ctx, field, seen);
     }
 }
@@ -971,7 +979,8 @@ bool HideOptionsClip(uint32_t clip) {
 }
 
 std::optional<int> OptionsMenuRowAt(uint32_t screen, float stage_x, float stage_y) {
-    if (!PageOpen() || screen != g_state.screen || !g_lines.seen) return std::nullopt;
+    bool lines = PageOpen() || ListShown();
+    if (!lines || screen != g_state.screen || !g_lines.seen) return std::nullopt;
     float width = G<float>(kStageWidthNow);
     float height = G<float>(kStageHeightNow);
     if (!(width > 0.0f) || !(height > 0.0f)) return -1;
@@ -979,8 +988,10 @@ std::optional<int> OptionsMenuRowAt(uint32_t screen, float stage_x, float stage_
     float y = stage_y * kStageHeight / height;
     if (std::fabs(x - g_lines.middle_x) > kColumnHalf) return -1;
     float step = LineStep() > 0.0f ? LineStep() : kColumnHalf;
-    for (int slot = 0; slot < PageSlots(); slot++) {
-        if (std::fabs(y - LineY(slot) - g_lines.middle_dy) <= step / 2) return slot;
+    int slots = PageOpen() ? PageSlots() : ListSlots();
+    int top = PageOpen() ? 0 : g_state.list_top;
+    for (int slot = 0; slot < slots; slot++) {
+        if (std::fabs(y - LineY(slot) - g_lines.middle_dy) <= step / 2) return top + slot;
     }
     return -1;
 }
@@ -999,7 +1010,7 @@ static void DrawField(X86Context& ctx, uint8_t* base) {
     }
     Place place = DrawnPlace();
     std::optional<Field> seen = Observe(data, place);
-    bool hiding = PageOpen() || ListScrolled() || PreviewPage() >= 0;
+    bool hiding = PageOpen() || ListShown() || PreviewPage() >= 0;
     if (hiding && !DrawingPauseTab() && InRows(place)) {
         Return(ctx, 0, 0);
     } else {

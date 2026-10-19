@@ -77,8 +77,9 @@ bool g_relabel = false;
 bool g_drawing = false;
 bool g_column = false;  // a stock tab of the column draws
 
+// a closed menu's screen may already be freed
 bool IsTabScreen(uint32_t screen) {
-    return screen && R32(screen) == kMenuScreenVtable && R32(screen + kScreenCount) == kStockTabs;
+    return Readable(screen) && R32(screen) == kMenuScreenVtable && R32(screen + kScreenCount) == kStockTabs;
 }
 
 int StockIndex() { return IsTabScreen(g_tabs.screen) ? int(R32(g_tabs.screen + kScreenIndex)) : -1; }
@@ -296,7 +297,11 @@ bool Step(X86Context& ctx, int step) {
 }  // namespace
 
 void UpdatePauseTabs(uint32_t screen) {
-    if (!IsTabScreen(screen)) return;
+    if (!IsTabScreen(screen)) {
+        // menu closed: every clip draw reads the kept screen, which the game frees
+        g_tabs.screen = 0;
+        return;
+    }
     int stock = int(R32(screen + kScreenIndex));
     if (screen != g_tabs.screen) g_tabs = {screen, stock};
     if (stock != kLastTab || g_tabs.tab < kLastTab) g_tabs.tab = stock;
