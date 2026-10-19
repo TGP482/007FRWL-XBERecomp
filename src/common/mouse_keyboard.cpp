@@ -161,8 +161,11 @@ constexpr int kPadDigitalButtons = 8;   // Pad::buttons bits in use
 constexpr int kPorts = 4;
 constexpr USHORT kUsagePageGeneric = 1;
 constexpr USHORT kUsageMouse = 2;
+// a wheel notch in a menu steps along its list: up and down, or left and right in a row
 constexpr uint16_t kWheelUp = 1 << kDpadUp;
 constexpr uint16_t kWheelDown = 1 << kDpadDown;
+constexpr uint16_t kWheelBack = 1 << kDpadLeft;
+constexpr uint16_t kWheelNext = 1 << kDpadRight;
 // the wheel binds as two keys, codes Windows leaves unassigned
 constexpr int kWheelUpKey = 0x0E;
 constexpr int kWheelDownKey = 0x0F;
@@ -234,6 +237,7 @@ std::atomic<int> g_wheel{0};  // notches in the menus not yet pressed
 std::atomic<uint32_t> g_press{0};
 std::atomic<uint64_t> g_press_until{0};
 std::atomic<Section> g_section{Section::Foot};
+std::atomic<bool> g_wheel_across{false};
 
 // a wheel notch in the menus, pressed on the dpad with a release before the next; pad thread only
 struct WheelStep {
@@ -416,8 +420,18 @@ int PromptButton(const Entry& entry) {
 
 constexpr int kArrows[] = {VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT};
 
-// Enter and Space accept in the menus only; in play they do what they are bound to
-bool AcceptDown() { return Down(VK_RETURN) || Down(VK_SPACE); }
+// Space accepts in the menus only where it is bound to A, Enter always; in play they do what they are bound to
+bool SpaceIsA() {
+    std::lock_guard lock(g_bind_lock);
+    for (size_t i = 0; i < kCount; i++) {
+        bool a = kEntries[i].kind == Kind::Analog && kEntries[i].index == kA;
+        const std::vector<int>& keys = g_binds[i];
+        if (a && std::find(keys.begin(), keys.end(), VK_SPACE) != keys.end()) return true;
+    }
+    return false;
+}
+
+bool AcceptDown() { return Down(VK_RETURN) || (Down(VK_SPACE) && SpaceIsA()); }
 
 // keys held when the window got the input wait for release
 bool AnyPressingKeyDown(const Binds& binds) {
@@ -600,7 +614,9 @@ void PressWheel(Pad& pad) {
     if (!released || notches == 0) return;
     int step = notches > 0 ? 1 : -1;
     g_wheel -= step;
-    g_step = {step > 0 ? kWheelUp : kWheelDown, now + kTapMs};
+    uint16_t back = g_wheel_across ? kWheelBack : kWheelUp;
+    uint16_t next = g_wheel_across ? kWheelNext : kWheelDown;
+    g_step = {step > 0 ? back : next, now + kTapMs};
     pad.buttons |= g_step.button;
 }
 
@@ -698,6 +714,8 @@ void SeenPad(int port, const Pad& pad) {
     }
     if (held & ~g_pad_held[size_t(port)].exchange(held)) SetKeyboard(false);
 }
+
+void SetMenuWheelAcross(bool across) { g_wheel_across = across; }
 
 void SetMenu(bool menu) {
     if (g_menu.exchange(menu) != menu) RefreshCursor();

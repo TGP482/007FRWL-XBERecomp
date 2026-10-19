@@ -721,6 +721,8 @@ void UpdateCursor(X86Context& ctx) {
     uint32_t screen = CaseShown() ? 0 : MenuScreen();
     TraceScreen(screen);
     UpdateMenu(screen);
+    bool row = screen && R32(screen + kScreenRows) == 1 && R32(screen + kScreenColumns) > 1;
+    input::SetMenuWheelAcross(row);
     UpdatePauseTabs(screen && IsPauseTabs(screen) ? screen : 0);
     input::SetPageKeys(screen ? std::optional(KeysOf(screen)) : std::nullopt);
     std::optional<input::Pointer> cursor = screen ? input::Cursor() : std::nullopt;
