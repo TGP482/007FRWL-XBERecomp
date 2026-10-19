@@ -29,6 +29,7 @@ enum class View { Chase, Jetpack, Turret, Scope, LockOn, Throw, Copter, Count };
 
 struct Share {
     input::MouseMove move{};
+    input::MouseMove taken{};  // this frame's, for another camera of the view updated in the same frame
     uint32_t frame = 0;
 };
 std::array<Share, size_t(View::Count)> g_shares;
@@ -40,17 +41,19 @@ void AddToShares(input::MouseMove move) {
     }
 }
 
-// the motion since the view last turned; a view that missed a frame starts again from none
+// the motion since the view last turned; a view that missed a frame starts again from none. Leaving a door the
+// game updates two chase cameras a frame while it blends them, each turns by the same motion.
 input::MouseMove Take(View view) {
     if (R32(kGameMode) != kModeRunning) return {};
     if (std::optional<input::MouseMove> move = input::TakeMouse()) AddToShares(*move);
     Share& share = g_shares[size_t(view)];
     uint32_t frame = R32(kFrameCount);
+    if (frame == share.frame) return share.taken;
     bool missed = frame - share.frame > 1;
-    input::MouseMove taken = missed ? input::MouseMove{} : share.move;
+    share.taken = missed ? input::MouseMove{} : share.move;
     share.move = {};
     share.frame = frame;
-    return taken;
+    return share.taken;
 }
 
 // the player driven from the keyboard's port, the other players keep their controllers
