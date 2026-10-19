@@ -21,11 +21,13 @@ constexpr Entry kEntries[] = {
     // options menu pages and the RECOMP SETTINGS sections
     {"RECOMP SETTINGS", {u"Paramètres Recomp", u"Recomp-Einstellungen", u"Impostazioni Recomp", u"Configuración de Recomp"}},
     {"MOUSE AND KEYBOARD", {u"Souris et clavier", u"Maus und Tastatur", u"Mouse e tastiera", u"Ratón y teclado"}},
+    {"CONTROLLER", {u"Manette", u"Controller", u"Controller", u"Mando"}},
     {"GENERAL", {u"Général", u"Allgemein", u"Generale", u"General"}},
     {"DISPLAY", {u"Affichage", u"Anzeige", u"Video", u"Pantalla"}},
     {"GRAPHICS", {u"Graphismes", u"Grafik", u"Grafica", u"Gráficos"}},
     {"RESTORE DEFAULTS", {u"Rétablir les valeurs par défaut", u"Standard wiederherstellen", u"Ripristina predefiniti", u"Restaurar predeterminados"}},
     {"PRESS A KEY", {u"Appuyez sur une touche", u"Taste drücken", u"Premi un tasto", u"Pulsa una tecla"}},
+    {"PRESS A BUTTON", {u"Appuyez sur un bouton", u"Taste drücken", u"Premi un pulsante", u"Pulsa un botón"}},
     {"UNBOUND", {u"Non assigné", u"Nicht belegt", u"Non assegnato", u"Sin asignar"}},
 
     // RECOMP SETTINGS rows
@@ -114,6 +116,7 @@ constexpr Entry kEntries[] = {
     {"MOUSE", {u"Souris", u"Maus", u"Mouse", u"Ratón"}},
     {"KEYBOARD", {u"Clavier", u"Tastatur", u"Tastiera", u"Teclado"}},
     {"Press a key or mouse button to bind, Escape cancels", {u"Appuyez sur une touche ou un bouton de souris, Échap pour annuler", u"Taste oder Maustaste drücken, Escape bricht ab", u"Premi un tasto o un pulsante del mouse, Esc per annullare", u"Pulsa una tecla o un botón del ratón, Escape para cancelar"}},
+    {"Press a controller button to bind, Escape cancels", {u"Appuyez sur un bouton de la manette, Échap pour annuler", u"Controllertaste drücken, Escape bricht ab", u"Premi un pulsante del controller, Esc per annullare", u"Pulsa un botón del mando, Escape para cancelar"}},
     {"Right click or Delete clears the key", {u"Clic droit ou Suppr pour effacer la touche", u"Rechtsklick oder Entf löscht die Taste", u"Clic destro o Canc per cancellare il tasto", u"Clic derecho o Supr para borrar la tecla"}},
 };
 

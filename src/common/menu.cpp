@@ -31,6 +31,7 @@
 #include "common/monitor.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
+#include "common/pad_binds.h"
 #include "common/translations.h"
 
 namespace app {
@@ -44,15 +45,17 @@ bool g_display_held = false;
 Settings g_display;
 std::string g_display_monitor;  // the held monitor, beside g_display
 
-const char* const kPages[] = {"RECOMP SETTINGS", "MOUSE AND KEYBOARD"};
+const char* const kPages[] = {"RECOMP SETTINGS", "MOUSE AND KEYBOARD", "CONTROLLER"};
 constexpr int kPageCount = int(std::size(kPages));
 constexpr int kInputPage = 1;
+constexpr int kControllerPage = 2;
 int g_page = 0;
 
 // the key binding in progress: its keys must be let go before the next press binds
 struct Capture {
     std::atomic<int> action{-1};  // the row being rebound, -1 when idle
     int slot = 0;  // its box: 0 the key, 1 the alternate
+    bool pad = false;  // a controller button binds, not a key
     bool armed = false;
     int done_frame = 0;  // frame of the last bind, the key that bound must not start another
 };
@@ -514,6 +517,17 @@ const std::vector<Row>& InputRows() {
     return list;
 }
 
+// a bind row for each controller action
+const std::vector<Row>& ControllerRows() {
+    static const std::vector<Row> list = [] {
+        std::vector<Row> out = {{Kind::Heading, -1, "CONTROLLER"}};
+        std::span<const input::Action> actions = input::PadActions();
+        for (size_t i = 0; i < actions.size(); i++) out.push_back({Kind::PadBind, int(i), actions[i].label});
+        return out;
+    }();
+    return list;
+}
+
 bool SameDisplay(const Settings& a, const Settings& b) {
     bool same_monitor = MonitorSetting(a) == MonitorSetting(b);
     return same_monitor && a.display_mode == b.display_mode && a.width == b.width && a.height == b.height;
@@ -682,9 +696,10 @@ std::string KeyText(std::string keys) {
 
 void CancelCapture() { g_capture.action = -1; }
 
-void StartCapture(int action, int slot) {
+void StartCapture(int action, int slot, bool pad = false) {
     g_capture.action = action;
     g_capture.slot = slot;
+    g_capture.pad = pad;
     g_capture.armed = false;
 }
 
@@ -696,10 +711,27 @@ void EndCapture() {
 // a row or a tab was just bound or chosen: nothing may start on the frame after a bind
 bool BindingSettled() { return !Capturing() && ImGui::GetFrameCount() > g_capture.done_frame + 1; }
 
+// Escape cancels, a controller button binds once every button is let go
+void PollPadCapture(int vk) {
+    int button = input::PressedPadButton();
+    if (vk == VK_ESCAPE) {
+        EndCapture();
+        return;
+    }
+    if (!g_capture.armed) {
+        g_capture.armed = button < 0;
+        return;
+    }
+    if (button < 0) return;
+    input::BindPad(size_t(g_capture.action.load()), button);
+    EndCapture();
+}
+
 // Escape cancels, any other bindable key or mouse button binds
 void PollCapture() {
     if (!Capturing()) return;
     int vk = input::PollCapturedKey();
+    if (g_capture.pad) return PollPadCapture(vk);
     if (!g_capture.armed) {
         g_capture.armed = vk == 0;
         return;
@@ -747,7 +779,7 @@ BoxInput DrawKeyBox(const RowLayout& row, const KeyBox& box, const std::string& 
     ImU32 fill = ImGui::GetColorU32(lit ? ImGuiCol_Header : ImGuiCol_FrameBg);
     ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), fill);
     std::string text = key == kUnbound ? Ui(key) : key;  // key names as they are
-    if (box.capturing) text = Ui("PRESS A KEY");
+    if (box.capturing) text = Ui(g_capture.pad ? "PRESS A BUTTON" : "PRESS A KEY");
     float centred = (box.width - ImGui::CalcTextSize(text.c_str()).x) * 0.5f;
     ImGui::SetCursorPos(ImVec2(box.x + std::max(centred, 0.0f), row.origin.y));
     ImGui::AlignTextToFramePadding();
@@ -790,12 +822,20 @@ BindInput BindRow(const char* label, const std::vector<std::string>& keys, int c
 }
 
 void DrawBindRow(const Row& row) {
-    int capturing = g_capture.action == row.id ? g_capture.slot : -1;
+    int capturing = !g_capture.pad && g_capture.action == row.id ? g_capture.slot : -1;
     BindInput seen = BindRow(row.label, KeyBoxes(size_t(row.id)), capturing);
     if (seen.pointed >= 0) g_hovered_box = seen.pointed;
     // a Delete that answered a capture is no clear
     if (seen.cleared >= 0 && BindingSettled()) input::Bind(size_t(row.id), 0, seen.cleared);
     if (seen.pressed >= 0 && BindingSettled()) StartCapture(row.id, seen.pressed);
+}
+
+// one box: a controller action always has a button, so it is not cleared
+void DrawPadBindRow(const Row& row) {
+    int capturing = g_capture.pad && g_capture.action == row.id ? 0 : -1;
+    std::string button = input::PadBinding(size_t(row.id));
+    BindInput seen = BindRow(row.label, {button.empty() ? kUnbound : button}, capturing);
+    if (seen.pressed >= 0 && BindingSettled()) StartCapture(row.id, 0, true);
 }
 
 void DrawRow(const Row& row) {
@@ -808,6 +848,9 @@ void DrawRow(const Row& row) {
             break;
         case Kind::Bind:
             DrawBindRow(row);
+            break;
+        case Kind::PadBind:
+            DrawPadBindRow(row);
             break;
     }
 }
@@ -829,6 +872,8 @@ void RestoreDefaults(int page) {
         game::Opt().pause_on_focus_loss = defaults.pause_on_focus_loss;
         audio::SetOutputMode(defaults.audio_output);
         RestoreSettingsDefaults();
+    } else if (page == kControllerPage) {
+        input::ResetPadBindings();
     } else {
         const game::Options defaults;
         game::Options& options = game::Opt();
@@ -889,7 +934,9 @@ void DrawTitle() {
 
 void DrawHint() {
     const char* hint = "";
-    if (Capturing()) {
+    if (Capturing() && g_capture.pad) {
+        hint = "Press a controller button to bind, Escape cancels";
+    } else if (Capturing()) {
         hint = "Press a key or mouse button to bind, Escape cancels";
     } else if (g_page == kInputPage && g_hovered_box >= 0) {
         hint = "Right click or Delete clears the key";
@@ -1004,14 +1051,18 @@ const rows::Row* rows::Page(int page, size_t* count) {
         *count = std::size(kSettingsRows);
         return kSettingsRows;
     }
-    *count = InputRows().size();
-    return InputRows().data();
+    const std::vector<Row>& list = page == kControllerPage ? ControllerRows() : InputRows();
+    *count = list.size();
+    return list.data();
 }
 
 // the game's menu applies a change at once, display rows too
 std::string rows::Value(const Row& row, int step) {
-    if (row.kind == Kind::Bind && g_capture.action == row.id) return "PRESS A KEY";
+    bool capturing = g_capture.action == row.id;
+    if (row.kind == Kind::Bind && capturing && !g_capture.pad) return "PRESS A KEY";
     if (row.kind == Kind::Bind) return KeyText(input::Binding(size_t(row.id)));
+    if (row.kind == Kind::PadBind && capturing && g_capture.pad) return "PRESS A BUTTON";
+    if (row.kind == Kind::PadBind) return KeyText(input::PadBinding(size_t(row.id)));
     if (row.kind != Kind::Value) return {};
     if (Greyed(row.id)) return "NOT SUPPORTED";
     std::string text = kSteps[row.id](Get(), step);
@@ -1025,6 +1076,7 @@ void rows::Defaults(int page) { RestoreDefaults(page); }
 
 void rows::Bind(const Row& row) {
     if (row.kind == Kind::Bind && !Capturing()) StartCapture(row.id, 0);
+    if (row.kind == Kind::PadBind && !Capturing()) StartCapture(row.id, 0, true);
 }
 
 bool MenuOpen() { return g_open.load(std::memory_order_relaxed); }

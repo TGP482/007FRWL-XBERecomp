@@ -27,6 +27,7 @@ struct Options {
     bool pause_on_focus_loss = true;  // the game and its sound stop while the window is in the background
     bool async_shaders = true;  // a draw whose pipeline needs compiling is skipped until the build threads have it
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
+    std::map<std::string, std::string> pad_buttons;  // action id to a controller button's name, absent is the default
 };
 Options& Opt();
 const char* ShownLanguage();  // language.cpp

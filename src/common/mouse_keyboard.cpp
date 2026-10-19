@@ -625,6 +625,8 @@ void SetMenu(bool menu) {
     if (g_menu.exchange(menu) != menu) RefreshCursor();
 }
 
+bool InMenu() { return g_menu; }
+
 bool KeyboardActive() { return g_keyboard; }
 
 bool LeftButton() { return Active() && !g_settle && Down(VK_LBUTTON); }

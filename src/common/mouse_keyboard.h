@@ -45,6 +45,7 @@ bool CaptureRecent();   // a key capture polled a moment ago
 // the game's own menus
 void SeenPad(int port, const Pad& pad);  // a controller's report before the keys join it: its input hides the cursor
 void SetMenu(bool menu);       // game thread, each tick: a menu page takes the input
+bool InMenu();                 // a menu page takes the input, whichever device is used
 bool KeyboardActive();         // keyboard or mouse used last, not a controller
 bool LeftButton();             // the left mouse button held in the game window
 bool CursorShown();            // in a menu with the keyboard or mouse used last

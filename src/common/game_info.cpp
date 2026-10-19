@@ -16,6 +16,7 @@
 #include "common/monitor.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
+#include "common/pad_binds.h"
 #include "common/saves.h"
 #include "core/input.h"
 
@@ -95,11 +96,12 @@ bool Message(void* hwnd, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* resu
     return false;
 }
 
-// port 0 has the keyboard; the game sees no input while the panel is open
+// port 0 has the keyboard; the game sees no input while the panel is open or a binding waits
 void Pad(int port, input::Pad& pad) {
     input::SeenPad(port, pad);
+    input::RemapPad(port, pad);
     if (port == 0) pad.connected = true;
-    if (app::MenuOpen()) {
+    if (app::MenuOpen() || app::Capturing()) {
         pad = input::Pad{.connected = pad.connected};
     } else if (port == 0) {
         input::Keyboard(pad);
@@ -113,6 +115,20 @@ void Rumble(int port, uint16_t& left, uint16_t& right) {
     right = 0;
 }
 
+void LoadNames(const toml::table& settings, const char* name, std::map<std::string, std::string>& names) {
+    const toml::table* table = settings[name].as_table();
+    if (!table) return;
+    for (auto&& [id, value] : *table) {
+        if (auto text = value.value<std::string>()) names[std::string(id.str())] = *text;
+    }
+}
+
+void SaveNames(toml::table& settings, const char* name, const std::map<std::string, std::string>& names) {
+    toml::table table;
+    for (const auto& [id, text] : names) table.insert(id, text);
+    settings.insert(name, table);
+}
+
 // what the options list cannot hold
 void Load(const void* table) {
     const toml::table& settings = *static_cast<const toml::table*>(table);
@@ -120,11 +136,8 @@ void Load(const void* table) {
     float sensitivity = float(settings["mouse_sensitivity"].value_or(double(options.mouse_sensitivity)));
     if (std::isfinite(sensitivity)) options.mouse_sensitivity = sensitivity;
     options.monitor = settings["monitor"].value_or(options.monitor);
-    const toml::table* keys = settings["keys"].as_table();
-    if (!keys) return;
-    for (auto&& [id, value] : *keys) {
-        if (auto names = value.value<std::string>()) Opt().keys[std::string(id.str())] = *names;
-    }
+    LoadNames(settings, "keys", options.keys);
+    LoadNames(settings, "pad_buttons", options.pad_buttons);
 }
 
 void Save(void* table) {
@@ -132,13 +145,13 @@ void Save(void* table) {
     settings.insert("monitor", Opt().monitor);
     // thousandths, so the file reads 0.3 and not 0.30000001192092896
     settings.insert("mouse_sensitivity", std::round(double(Opt().mouse_sensitivity) * 1000.0) / 1000.0);
-    toml::table keys;
-    for (const auto& [id, names] : Opt().keys) keys.insert(id, names);
-    settings.insert("keys", keys);
+    SaveNames(settings, "keys", Opt().keys);
+    SaveNames(settings, "pad_buttons", Opt().pad_buttons);
 }
 
 void Init() {
     input::LoadBindings();
+    input::LoadPadBindings();
     audio::SetOutputMode(Opt().audio_output);
     RemoveUnfinishedSaves();
 }
