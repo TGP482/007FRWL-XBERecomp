@@ -1,7 +1,9 @@
 #pragma once
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "core/input.h"
 
@@ -42,6 +44,10 @@ int PollCapturedKey();  // a bindable key or mouse button held now, 0 for none; 
 bool PanelKey(int vk);  // the settings panel is bound to this key and no key capture wants it
 bool HudKey(int vk);    // the toggle HUD action is bound to this key and no key capture wants it
 bool CaptureRecent();   // a key capture polled a moment ago
+
+// the actions with a key down now, a bit per Actions() index; none while the game does not have the keys
+uint64_t HeldActions();
+int ActionIndex(std::string_view id);  // -1 for none
 
 // the game's own menus
 void SeenPad(int port, const Pad& pad);  // a controller's report before the keys join it: its input hides the cursor

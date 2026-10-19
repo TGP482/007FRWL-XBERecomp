@@ -65,7 +65,8 @@ enum Look {
     kLookRight,
     kLookCount,
 };
-enum class Kind { Analog, Button, Move, Look, Host, Walk };
+// Game: presses nothing on the pad, the game's action queries read it (game/actions.cpp)
+enum class Kind { Analog, Button, Move, Look, Host, Walk, Game };
 
 struct Entry {
     Action action;
@@ -80,9 +81,9 @@ constexpr Entry kEntries[] = {
     {{"strafe_left", "STRAFE LEFT", "A"}, Kind::Move, kLeft},
     {{"strafe_right", "STRAFE RIGHT", "D"}, Kind::Move, kRight},
     {{"walk", "WALK", "Alt"}, Kind::Walk, 0},
-    {{"jump", "JUMP", "Space"}, Kind::Analog, kA},
+    {{"jump", "JUMP", "Space"}, Kind::Game, -1},
     {{"interact", "INTERACT / CLIMB", "F"}, Kind::Analog, kA},
-    {{"reload", "RELOAD", "R"}, Kind::Analog, kA},
+    {{"reload", "RELOAD", "R"}, Kind::Game, -1},
     {{"dive_roll", "DIVE ROLL", "Shift"}, Kind::Analog, kB},
     {{"focus", "FOCUS", "E"}, Kind::Analog, kX},
     {{"wall_cover", "WALL COVER / EXIT VEHICLE", "Ctrl"}, Kind::Analog, kY},
@@ -103,6 +104,7 @@ constexpr Entry kEntries[] = {
     {{"look_right", "LOOK RIGHT", "Right"}, Kind::Look, kLookRight},
 };
 constexpr size_t kCount = std::size(kEntries);
+static_assert(kCount <= 64, "HeldActions keeps a bit per action");
 
 constexpr size_t ActionIndex(std::string_view id) {
     size_t i = 0;
@@ -377,6 +379,7 @@ void Press(const Entry& entry, Pad& pad, StickKeys& sticks) {
             sticks.walk = true;
             break;
         case Kind::Host:
+        case Kind::Game:
             break;
     }
 }
@@ -755,6 +758,23 @@ int PollCapturedKey() {
 }
 
 bool CaptureRecent() { return NowMs() - g_capture_ms <= kCaptureGuardMs; }
+
+uint64_t HeldActions() {
+    if (!Active() || g_settle || app::Capturing()) return 0;
+    Binds binds = CopyBinds();
+    uint64_t held = 0;
+    for (size_t i = 0; i < kCount; i++) {
+        if (AnyDown(binds[i])) held |= uint64_t(1) << i;
+    }
+    return held;
+}
+
+int ActionIndex(std::string_view id) {
+    for (size_t i = 0; i < kCount; i++) {
+        if (kEntries[i].action.id == id) return int(i);
+    }
+    return -1;
+}
 
 // the action is bound to this key and no key capture wants it
 bool HostKeyBound(size_t action, int vk) {
