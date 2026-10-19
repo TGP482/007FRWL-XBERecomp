@@ -1,4 +1,5 @@
 #include <deque>
+#include <unordered_set>
 
 #include "common/options.h"
 #include "xdk/hle.h"
@@ -6,7 +7,8 @@
 using namespace kernel;
 
 // Persistent bodies: the newest dead enemies, and the guns and shields they drop, are never faded out and deleted.
-// Older ones fade as on the console: kept forever they fill the game's memory and its allocations start to fail.
+// Older ones fade as on the console. A kept body animates only while its animation is still loaded: the game frees
+// it a while after the console would have deleted the body.
 
 namespace {
 
@@ -18,6 +20,16 @@ constexpr uint32_t kGameMs = 0x824360;
 // actor fade, thiscall (ms, delete when done, flag 8)
 constexpr uint32_t kFade = 0x3255A0;
 constexpr uint32_t kFadeMs = 1000;
+
+// actor animation update 0x33B720, thiscall (seconds, forced)
+constexpr uint32_t kAnimateArgs = 2;
+
+// animation instance at actor +0x190: the set it plays from, the playing animation's data and id
+constexpr uint32_t kActorAnimation = 0x190;
+constexpr uint32_t kAnimationSet = 0x04;
+constexpr uint32_t kAnimationData = 0x0C;
+constexpr uint32_t kAnimationId = 0x10;
+constexpr uint32_t kFindAnimation = 0x3EE300;  // cdecl (set, id), the loaded data or 0
 
 // enemy: its two held items, each a pointer 0x20 into the item
 constexpr uint32_t kHeldItems = 0xAF0;
@@ -42,6 +54,7 @@ struct Body {
 
 std::deque<Body> g_bodies;
 std::deque<Kept> g_items;
+std::unordered_set<uint32_t> g_posed;  // kept bodies, faded ones too until deleted
 
 Kept Keep(uint32_t actor) { return actor ? Kept{actor, R32(actor)} : Kept{}; }
 
@@ -87,6 +100,7 @@ void Forget(Kept& kept, uint32_t actor) {
 bool KeepCorpse(X86Context& ctx, uint8_t*) {
     if (!game::Opt().persistent_bodies) return false;
     g_bodies.push_back(KeptBody(ctx.ebx));
+    g_posed.insert(ctx.ebx);
     if (g_bodies.size() > kKeptBodies) {
         Body oldest = g_bodies.front();
         g_bodies.pop_front();
@@ -115,5 +129,26 @@ X86_FUNC(sub_0033C220) {
         for (Kept& held : body.held) Forget(held, actor);
     }
     for (Kept& item : g_items) Forget(item, actor);
+    g_posed.erase(actor);
     __imp__sub_0033C220(ctx, base);
+}
+
+// the playing animation is still the one its set holds, not freed data
+static bool AnimationLoaded(X86Context& ctx, uint32_t actor) {
+    uint32_t instance = R32(actor + kActorAnimation);
+    if (!instance) return false;
+    X86Context saved = ctx;
+    uint32_t data = CallGuest(ctx, kFindAnimation, {R32(instance + kAnimationSet), R32(instance + kAnimationId)});
+    ctx = saved;
+    return data && data == R32(instance + kAnimationData);
+}
+
+// actor animation update: a kept body whose animation is gone skips it and holds its pose
+X86_EXTERN_FUNC(__imp__sub_0033B720);
+X86_FUNC(sub_0033B720) {
+    if (g_posed.count(ctx.ecx) && !AnimationLoaded(ctx, ctx.ecx)) {
+        Return(ctx, 0, kAnimateArgs);
+        return;
+    }
+    __imp__sub_0033B720(ctx, base);
 }
