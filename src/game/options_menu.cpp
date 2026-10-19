@@ -125,7 +125,7 @@ constexpr int kMaxFields = 4;     // text fields of one part of a row, shadows i
 constexpr float kWiden = 3.0f;    // a copy's box grows by this many of its widths, so a long text keeps one line
 
 // a page row: its name and value span the options panel's column, in screen pixels, at a smaller text
-constexpr float kColumnHalf = 150.0f;
+constexpr float kColumnHalf = 160.0f;
 constexpr float kPageTextScale = 0.75f;
 constexpr int kStageWidth = 640;  // the screen the Flash stage is drawn across
 constexpr int kStageHeight = 480;
@@ -232,12 +232,24 @@ Place SlotPlace(int slot) { return g_layout.row[size_t(std::clamp(slot, 0, g_lay
 
 bool ListScrolled() { return !PageOpen() && g_state.list_top > 0; }
 
-// a page's lines are spread evenly over the stock rows' height
-float LineY(int slot) {
-    float first = SlotPlace(0).y;
-    float last = SlotPlace(Slots() - 1).y;
-    return Slots() > 1 ? first + (last - first) * float(slot) / float(Slots() - 1) : first;
+// a page's lines are as far apart as the stock rows nearest each other
+float LineStep() {
+    float step = 0.0f;
+    for (int row = 1; row < Slots(); row++) {
+        float gap = SlotPlace(row).y - SlotPlace(row - 1).y;
+        if (step == 0.0f || gap < step) step = gap;
+    }
+    return step;
 }
+
+// as many lines as fit in the stock rows' height
+int LineSlots() {
+    float step = LineStep();
+    float height = SlotPlace(Slots() - 1).y - SlotPlace(0).y;
+    return step > 0.0f ? int(height / step) + 1 : Slots();
+}
+
+float LineY(int slot) { return SlotPlace(0).y + LineStep() * float(slot); }
 
 // Pages.
 
@@ -276,7 +288,7 @@ void FillRows() {
 int PageRowCount() { return int(g_state.rows.size()); }
 
 // the slots the page shows at once, the screen's rows
-int PageSlots() { return std::min(PageRowCount(), Slots()); }
+int PageSlots() { return std::min(PageRowCount(), LineSlots()); }
 
 bool HasRow(int index) { return index >= 0 && index < PageRowCount(); }
 
@@ -936,7 +948,7 @@ std::optional<int> OptionsMenuRowAt(uint32_t screen, float stage_x, float stage_
     float x = stage_x * kStageWidth / width;
     float y = stage_y * kStageHeight / height;
     if (std::fabs(x - g_lines.middle_x) > kColumnHalf) return -1;
-    float step = Slots() > 1 ? std::fabs(LineY(1) - LineY(0)) : kColumnHalf;
+    float step = LineStep() > 0.0f ? LineStep() : kColumnHalf;
     for (int slot = 0; slot < PageSlots(); slot++) {
         if (std::fabs(y - LineY(slot) - g_lines.middle_dy) <= step / 2) return slot;
     }
