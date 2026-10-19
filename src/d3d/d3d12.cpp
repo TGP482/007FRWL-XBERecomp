@@ -787,6 +787,7 @@ struct DrawShaders {
     bool prog = false;  // a vertex program, else the fixed function pipeline
     bool quad = false;
     bool fixed_transform = false;  // fixed function on untransformed vertices: the shader reads matrices and lights
+    bool overlay = false;  // a transformed pass over geometry drawn before: OverlayHlsl and ApplyOverlayBias
     FixedKey fk;
     uint64_t vkey = 0;
     uint64_t vh = 0;
@@ -2576,6 +2577,15 @@ uint32_t SimpleState(const State& s, uint32_t method) {
 
 constexpr uint32_t kQuadVertices = 6;  // a quad drawn as two triangles
 
+// D3DCMP_LESSEQUAL
+constexpr uint32_t kZFuncLessEqual = 0x203;
+
+// depth tested LESSEQUAL with no depth write: a pass laid over geometry drawn before, such as the shadow projection
+bool OverlayPass(const State& s) {
+    bool zwrite = SimpleState(s, kMZWriteEnable) != 0;
+    return s.rs[kRsZEnable] && !zwrite && SimpleState(s, kMZFunc) == kZFuncLessEqual;
+}
+
 DrawShaders ClassifyShaders(const State& s, const Assembled& a, uint32_t count) {
     DrawShaders sh;
     // a shader made from a declaration alone (no program) is the fixed function pipeline on those inputs
@@ -2584,6 +2594,7 @@ DrawShaders ClassifyShaders(const State& s, const Assembled& a, uint32_t count) 
     bool points = a.topology == Topology::Points;
     sh.quad = count <= kQuadVertices && !s.rs[kRsZEnable] && !points;
     sh.fixed_transform = !sh.prog && !a.pretransformed;
+    sh.overlay = (sh.prog || sh.fixed_transform) && OverlayPass(s);
     if (!sh.prog) sh.fk = MakeFixedKey(s);
     return sh;
 }
@@ -2597,19 +2608,42 @@ void EnsureProgramHash(const State& s) {
 constexpr uint64_t kDeclarationSalt = 0x10000;    // fixed function seed, above the 16 bit register mask
 constexpr uint64_t kPretransformedSalt = 0x5A5A;  // screen space fixed function vertices, apart from untransformed
 constexpr uint64_t kQuadSalt = 0xC3C30000;        // the QuadHlsl variant, apart from the plain shader
+constexpr uint64_t kOverlaySalt = 0x3C3C0000;     // the OverlayHlsl variant
 
 uint64_t VertexKey(const State& s, const Assembled& a, const DrawShaders& sh) {
     uint64_t seed = sh.prog ? s.vs->hash ^ a.regs : Hash(&s.vs_handle, 4, a.regs | kDeclarationSalt);
     uint64_t vkey = Hash(&a.decode, 8, seed);
     if (!sh.prog && a.pretransformed) vkey ^= kPretransformedSalt;
     if (sh.quad) vkey ^= kQuadSalt;
+    if (sh.overlay) vkey ^= kOverlaySalt;
     if (!sh.prog) vkey = Hash(&sh.fk, sizeof(sh.fk), vkey);
     return vkey;
 }
 
+// world units of view depth an overlay pass is pulled toward the camera by (1/256): fixed function and vertex program
+// positions round apart by up to 3e-4 of them near the camera, past what the 16 unit depth bias covers there
+constexpr const char* kOverlayPull = "0.00390625";
+
+// moves z by (1 - z) * pull / w, a pull along view depth: it grows near the camera as the rounding gap does,
+// while x, y and w stay as they were
+std::string OverlayHlsl(std::string s) {
+    auto pull = [&](const char* at, const std::string& v) {
+        size_t p = s.find(at);
+        if (p == std::string::npos) return;
+        std::string pulled = "(" + v + ".w - " + v + ".z) / " + v + ".w * " + kOverlayPull;
+        s.insert(p, "    if (" + v + ".w > 0) " + v + ".z -= " + pulled + ";\n");
+    };
+    pull("    o.pos = q;\n", "q");
+    pull("    o.pos = cp;\n", "cp");
+    return s;
+}
+
 std::string VertexHlsl(const State& s, const Assembled& a, const DrawShaders& sh) {
-    if (sh.prog) return VertexProgramHlsl(s.vs->program, a.regs, a.decode);
-    return FixedVertexHlsl(a.regs, a.pretransformed, a.decode, sh.fk);
+    std::string src = sh.prog ? VertexProgramHlsl(s.vs->program, a.regs, a.decode)
+                              : FixedVertexHlsl(a.regs, a.pretransformed, a.decode, sh.fk);
+    if (sh.quad) return QuadHlsl(std::move(src));
+    if (sh.overlay) return OverlayHlsl(std::move(src));
+    return src;
 }
 
 // sets sh.vh, registering the shader's source on a miss; EnsurePipeline compiles it
@@ -2620,8 +2654,7 @@ void D3D12Backend::EnsureVertexShader(const State& s, const Assembled& a, DrawSh
         return;
     }
     g_perf.shaders++;
-    std::string src = VertexHlsl(s, a, sh);
-    sh.vh = Register(sh.quad ? QuadHlsl(std::move(src)) : src, "main", "vs_5_0");
+    sh.vh = Register(VertexHlsl(s, a, sh), "main", "vs_5_0");
     shader_src_[sh.vkey] = sh.vh;
 }
 
@@ -2708,8 +2741,6 @@ bool Translucent(const State& s, const PsoKey& k) {
     return see_through && AlphaTexture(s);
 }
 
-// D3DCMP_LESSEQUAL
-constexpr uint32_t kZFuncLessEqual = 0x203;
 // pulls an overlay pass toward the camera: 16 units of a 24 bit depth buffer, a quarter of the depth slope
 constexpr int32_t kOverlayBias = -16;
 constexpr float kOverlaySlope = -0.25f;
@@ -2717,10 +2748,10 @@ constexpr float kOverlaySlope = -0.25f;
 // A vertex program pass laid over geometry drawn before (the shadow projection redraws the fixed function world
 // with LESSEQUAL and no depth write). The console runs both through one transform unit with the same matrix, so
 // the depths match bit for bit; here the two paths round differently and the pass loses rows of pixels to the
-// depth test, which flickers as the camera moves. The pass gets a small bias toward the camera instead.
+// depth test, which flickers as the camera moves. The pass gets a small bias toward the camera instead, and
+// OverlayHlsl's pull near the camera. A fixed function pass over vertex program geometry is biased the same way.
 void D3D12Backend::ApplyOverlayBias(const DrawShaders& sh, PsoKey& k) const {
-    bool overlay = k.zen && !k.zwrite && k.zfunc == kZFuncLessEqual;
-    if (!sh.prog || !overlay || k.zbias || k.zslope) return;
+    if (!sh.overlay || k.zbias || k.zslope) return;
     k.zbias = kOverlayBias;
     k.zslope = kOverlaySlope;
 }
@@ -3096,8 +3127,7 @@ void D3D12Backend::CaptureShader(const char* kind, uint64_t key, const std::stri
 }
 
 void D3D12Backend::CaptureShaders(const State& s, const Assembled& a, const DrawShaders& sh, const PixelKey& pk) {
-    std::string src = VertexHlsl(s, a, sh);
-    CaptureShader("vs", sh.vkey, sh.quad ? QuadHlsl(std::move(src)) : src);
+    CaptureShader("vs", sh.vkey, VertexHlsl(s, a, sh));
     CaptureShader("ps", sh.pkey, PixelHlsl(pk));
 }
 
