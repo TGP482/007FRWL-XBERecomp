@@ -29,6 +29,7 @@ struct Action {
     const char* id;
     const char* label;
     const char* defaults;
+    const char* section = nullptr;  // the heading its bind sits under, none for the on foot keys
 };
 std::span<const Action> Actions();
 std::string Binding(size_t action);
@@ -48,6 +49,10 @@ bool CaptureRecent();   // a key capture polled a moment ago
 // the actions with a key down now, a bit per Actions() index; none while the game does not have the keys
 uint64_t HeldActions();
 int ActionIndex(std::string_view id);  // -1 for none
+
+// the controls the keyboard player has now, from the control map on top of their port
+enum class Section { Foot, Inventory, Car, Jetpack, Copter };
+void SetSection(Section section);  // game thread, each input update
 
 // the game's own menus
 void SeenPad(int port, const Pad& pad);  // a controller's report before the keys join it: its input hides the cursor

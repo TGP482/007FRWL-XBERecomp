@@ -68,13 +68,17 @@ enum Look {
 // Game: presses nothing on the pad, the game's action queries read it (game/actions.cpp)
 enum class Kind { Analog, Button, Move, Look, Host, Walk, Game };
 
+// a Game action's index is the pad button its prompts show, in ButtonKey's numbering, -1 for none
 struct Entry {
     Action action;
     Kind kind;
     int index;
+    Section section = Section::Foot;
 };
 
-// the game's controller layout
+constexpr int kFirstPadButton = 8;  // ButtonKey's numbering: the analog buttons, then the pad buttons
+
+// the game's controller layout, then the keys of the vehicles, which the game reads as actions
 constexpr Entry kEntries[] = {
     {{"move_forward", "MOVE FORWARD", "W"}, Kind::Move, kForward},
     {{"move_back", "MOVE BACK", "S"}, Kind::Move, kBackward},
@@ -86,7 +90,7 @@ constexpr Entry kEntries[] = {
     {{"reload", "RELOAD", "R"}, Kind::Game, -1},
     {{"dive_roll", "DIVE ROLL", "Shift"}, Kind::Analog, kB},
     {{"focus", "FOCUS", "E"}, Kind::Analog, kX},
-    {{"wall_cover", "WALL COVER / EXIT VEHICLE", "Ctrl"}, Kind::Analog, kY},
+    {{"wall_cover", "WALL COVER", "Ctrl"}, Kind::Analog, kY},
     {{"crouch", "CROUCH", "C"}, Kind::Analog, kBlack},
     {{"item_select", "ITEM SELECT", "Q"}, Kind::Analog, kWhite},
     {{"lock_on", "LOCK ON", "RMB"}, Kind::Analog, kLeftTrigger},
@@ -102,6 +106,25 @@ constexpr Entry kEntries[] = {
     {{"look_down", "LOOK DOWN", "Down"}, Kind::Look, kLookDown},
     {{"look_left", "LOOK LEFT", "Left"}, Kind::Look, kLookLeft},
     {{"look_right", "LOOK RIGHT", "Right"}, Kind::Look, kLookRight},
+    {{"car_accelerate", "ACCELERATE", "W"}, Kind::Game, kA, Section::Car},
+    {{"car_brake", "BRAKE / REVERSE", "S"}, Kind::Game, kX, Section::Car},
+    {{"car_steer_left", "STEER LEFT", "A"}, Kind::Move, kLeft, Section::Car},
+    {{"car_steer_right", "STEER RIGHT", "D"}, Kind::Move, kRight, Section::Car},
+    {{"car_handbrake", "HANDBRAKE", "Space"}, Kind::Game, kB, Section::Car},
+    {{"car_fire", "FIRE WEAPON", "LMB"}, Kind::Game, kRightTrigger, Section::Car},
+    {{"car_target_lock", "TARGET LOCK", "RMB"}, Kind::Game, kLeftTrigger, Section::Car},
+    {{"car_next_target", "NEXT TARGET", "E"}, Kind::Game, -1, Section::Car},
+    {{"car_cycle_weapon", "CYCLE WEAPON", "Q,Wheel Up"}, Kind::Game, kWhite, Section::Car},
+    {{"car_gadget", "USE GADGET", "G"}, Kind::Game, -1, Section::Car},
+    {{"car_look_back", "LOOK BACK", "C"}, Kind::Game, kFirstPadButton + kDpadDown, Section::Car},
+    {{"car_exit", "EXIT VEHICLE", "F"}, Kind::Game, kY, Section::Car},
+    {{"fly_forward", "FLY FORWARD", "W"}, Kind::Move, kForward, Section::Jetpack},
+    {{"fly_back", "FLY BACK", "S"}, Kind::Move, kBackward, Section::Jetpack},
+    {{"fly_left", "FLY LEFT", "A"}, Kind::Move, kLeft, Section::Jetpack},
+    {{"fly_right", "FLY RIGHT", "D"}, Kind::Move, kRight, Section::Jetpack},
+    {{"fly_up", "FLY UP", "Space"}, Kind::Game, kA, Section::Jetpack},
+    {{"fly_down", "FLY DOWN", "Ctrl"}, Kind::Game, kX, Section::Jetpack},
+    {{"fly_exit", "LAND / EXIT", "F"}, Kind::Game, kY, Section::Jetpack},
 };
 constexpr size_t kCount = std::size(kEntries);
 static_assert(kCount <= 64, "HeldActions keeps a bit per action");
@@ -120,7 +143,6 @@ constexpr size_t PauseActionIndex() {
     return i;
 }
 constexpr size_t kPauseAction = PauseActionIndex();
-constexpr int kFirstPadButton = 8;  // ButtonKey's numbering: the analog buttons, then the pad buttons
 
 constexpr uint8_t kFullPress = 0xFF;
 constexpr int16_t kFullStick = 32767;
@@ -207,6 +229,7 @@ std::atomic<bool> g_keyboard{true};
 std::atomic<int> g_wheel{0};  // notches in the menus not yet pressed
 std::atomic<uint32_t> g_press{0};
 std::atomic<uint64_t> g_press_until{0};
+std::atomic<Section> g_section{Section::Foot};
 
 // a wheel notch in the menus, pressed on the dpad with a release before the next; pad thread only
 struct WheelStep {
@@ -349,6 +372,42 @@ Binds CopyBinds() {
 
 bool AnyDown(const std::vector<int>& keys) { return std::any_of(keys.begin(), keys.end(), Down); }
 
+const char* SectionHeading(Section section) {
+    switch (section) {
+        case Section::Car:
+            return "CAR";
+        case Section::Jetpack:
+            return "JETPACK AND Q COPTER";
+        default:
+            return nullptr;
+    }
+}
+
+// the jetpack and the Q copter share their keys
+Section KeySection(Section now) { return now == Section::Copter ? Section::Jetpack : now; }
+
+// the on foot keys act everywhere but their moves, which give way to a vehicle's; a section's keys act only there
+bool Applies(const Entry& entry, Section now) {
+    if (entry.section != Section::Foot) return entry.section == KeySection(now);
+    if (entry.kind == Kind::Move) return now == Section::Foot;
+    // the car's right stick is its gas and brake
+    if (entry.kind == Kind::Look) return now != Section::Car;
+    return true;
+}
+
+// the pad button its prompts show, ButtonKey's numbering, -1 for none
+int PromptButton(const Entry& entry) {
+    switch (entry.kind) {
+        case Kind::Analog:
+        case Kind::Game:
+            return entry.index;
+        case Kind::Button:
+            return entry.index + kFirstPadButton;
+        default:
+            return -1;
+    }
+}
+
 constexpr int kArrows[] = {VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT};
 
 // Enter and Space accept in the menus only; in play they do what they are bound to
@@ -430,8 +489,10 @@ bool AnyGameDown(const std::vector<int>& keys, bool play) {
 // and the pause keys the page's cancel
 void PressBoundKeys(const Binds& binds, bool play, Pad& pad, StickKeys& sticks) {
     bool page = g_page.cancel || g_page.held;
+    Section now = g_section;
     for (size_t i = 0; i < kCount; i++) {
-        bool blocked = (kEntries[i].kind == Kind::Look && !play) || (i == kPauseAction && page);
+        bool look_blocked = kEntries[i].kind == Kind::Look && !play;
+        bool blocked = look_blocked || (i == kPauseAction && page) || !Applies(kEntries[i], now);
         bool down = AnyGameDown(binds[i], play);
         if (!blocked && down) Press(kEntries[i], pad, sticks);
     }
@@ -671,21 +732,28 @@ void SetPageKeys(std::optional<PageKeys> keys) {
     g_page_cancel = keys ? TapBits(keys->cancel) : 0;
 }
 
+// the section's own key first, then the on foot one
 std::string ButtonKey(int button) {
     std::lock_guard lock(g_bind_lock);
-    for (size_t i = 0; i < kCount; i++) {
-        const Entry& entry = kEntries[i];
-        bool analog = entry.kind == Kind::Analog && entry.index == button;
-        bool pad = entry.kind == Kind::Button && entry.index + kFirstPadButton == button;
-        if ((analog || pad) && !g_binds[i].empty()) return Label(g_binds[i].front());
+    for (Section section : {KeySection(g_section), Section::Foot}) {
+        for (size_t i = 0; i < kCount; i++) {
+            const Entry& entry = kEntries[i];
+            bool shown = entry.section == section && PromptButton(entry) == button;
+            if (shown && !g_binds[i].empty()) return Label(g_binds[i].front());
+        }
     }
     return {};
 }
 
+void SetSection(Section section) { g_section = section; }
+
 std::span<const Action> Actions() {
     static const std::array<Action, kCount> list = [] {
         std::array<Action, kCount> actions{};
-        for (size_t i = 0; i < kCount; i++) actions[i] = kEntries[i].action;
+        for (size_t i = 0; i < kCount; i++) {
+            actions[i] = kEntries[i].action;
+            actions[i].section = SectionHeading(kEntries[i].section);
+        }
         return actions;
     }();
     return list;

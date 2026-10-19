@@ -614,8 +614,17 @@ const std::vector<Row>& InputRows() {
             {Kind::Heading, -1, "KEYBOARD"},
         };
         std::span<const input::Action> actions = input::Actions();
-        for (size_t i = 0; i < actions.size(); i++) out.push_back({Kind::Bind, int(i), actions[i].label});
-        out.push_back({Kind::Value, kWalkSpeedRow, "WALK SPEED"});
+        const char* section = nullptr;
+        for (size_t i = 0; i < actions.size(); i++) {
+            // the on foot keys end with the walk speed, then each section under its heading
+            if (actions[i].section != section) {
+                if (!section) out.push_back({Kind::Value, kWalkSpeedRow, "WALK SPEED"});
+                section = actions[i].section;
+                out.push_back({Kind::Heading, -1, section});
+            }
+            out.push_back({Kind::Bind, int(i), actions[i].label});
+        }
+        if (!section) out.push_back({Kind::Value, kWalkSpeedRow, "WALK SPEED"});
         return out;
     }();
     return list;
