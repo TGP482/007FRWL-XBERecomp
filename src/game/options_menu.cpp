@@ -224,10 +224,11 @@ const Row* PageRow(int index) {
     return index >= 0 && index < int(rows.size()) ? rows[size_t(index)] : nullptr;
 }
 
-// the recomp's text in the language the game shows, one Latin 1 byte a character as the game's own text is; the
-// translations are all Latin 1, two UTF-8 bytes at most
-std::string MenuText(std::string_view english) {
-    std::string utf8 = app::Ui(english);
+}  // namespace
+
+// the translations are all Latin 1, two UTF-8 bytes at most
+std::string MenuText(std::string_view english, bool caps) {
+    std::string utf8 = app::Ui(english, caps);
     std::string text;
     for (size_t i = 0; i < utf8.size(); i++) {
         uint8_t c = uint8_t(utf8[i]);
@@ -241,6 +242,8 @@ std::string MenuText(std::string_view english) {
     }
     return text;
 }
+
+namespace {
 
 std::string RowLabel(int index) {
     const Row* row = PageRow(index);

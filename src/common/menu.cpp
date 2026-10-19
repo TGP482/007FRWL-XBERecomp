@@ -356,6 +356,12 @@ std::string StepSkipIntros(Settings&, int step) {
     return OnOff(on);
 }
 
+std::string StepSkippableCutscenes(Settings&, int step) {
+    bool& on = game::Opt().skippable_cutscenes;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
 std::string StepPauseOnFocusLoss(Settings&, int step) {
     bool& on = game::Opt().pause_on_focus_loss;
     if (step) on = !on;
@@ -441,6 +447,7 @@ enum RowId {
     kWalkSpeedRow,
     kMonitorRow,
     kPauseOnFocusLossRow,
+    kSkippableCutscenesRow,
 };
 
 // in RowId order
@@ -466,6 +473,7 @@ constexpr StepFn kSteps[] = {
     StepWalkSpeed,
     StepMonitor,
     StepPauseOnFocusLoss,
+    StepSkippableCutscenes,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -495,6 +503,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kAmbientOcclusionRow, "AMBIENT OCCLUSION"},
     {Kind::Heading, -1, "GENERAL"},
     {Kind::Value, kSkipIntrosRow, "SKIP INTROS"},
+    {Kind::Value, kSkippableCutscenesRow, "SKIPPABLE CUTSCENES"},
     {Kind::Value, kPauseOnFocusLossRow, "PAUSE ON FOCUS LOSS"},
     {Kind::Value, kAudioOutputRow, "AUDIO OUTPUT"},
 };
@@ -860,6 +869,7 @@ void RestoreDefaults(int page) {
     if (page == 0) {
         const game::Options defaults;
         game::Opt().skip_intros = defaults.skip_intros;
+        game::Opt().skippable_cutscenes = defaults.skippable_cutscenes;
         game::Opt().fps_counter = defaults.fps_counter;
         game::Opt().hdr_output = defaults.hdr_output;
         game::Opt().fmv_scale = defaults.fmv_scale;

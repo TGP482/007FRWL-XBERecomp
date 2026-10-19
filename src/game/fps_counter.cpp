@@ -1,11 +1,14 @@
+#include <algorithm>
 #include <bit>
 #include <cstdio>
+#include <string_view>
 
 #include "common/options.h"
 #include "game/hud.h"
 #include "xdk/hle.h"
 
-// Frame rate (top left), drawn by the game's own text manager, the one the HUD and menus use, over the finished frame.
+// Frame rate (top left) and other host text, drawn by the game's own text manager, the one the HUD and menus use, over
+// the finished frame.
 
 namespace {
 
@@ -24,6 +27,7 @@ constexpr uint32_t kFontHeight = 0x18;  // int
 constexpr uint32_t kBlack = 0;  // palette indices
 constexpr uint32_t kWhite = 12;
 constexpr uint32_t kAlignLeft = 0;
+constexpr uint32_t kAlignRight = 2;  // the position is the text's right end
 
 // RenderWare camera of the frame, cdecl
 constexpr uint32_t kCamera = 0x826EBC;
@@ -56,13 +60,20 @@ struct RenderState {
 // blend, vertex alpha on, no culling, depth test, depth write or fog, as the HUD sets them
 constexpr RenderState kOverlayStates[] = {{0x0A, 5}, {0x0B, 6}, {0x0C, 1}, {0x1E, 0}, {0x06, 0}, {0x08, 0}, {0x0E, 0}};
 
-// as on the other recomps: top left, 8 lines in on a page 480 high, a one line shadow
-constexpr float kLeft = 0.009f;  // of the page width
-constexpr float kTop = 0.016f;   // of the page height
-constexpr float kShadowX = 1.0f / 640.0f;
+constexpr float kShadowX = 1.0f / 640.0f;  // a one line shadow
 constexpr float kShadowY = 1.0f / 480.0f;
-constexpr float kScale = 0.6f;  // as the game's own text
-constexpr uint32_t kMaxChars = 32;
+constexpr uint32_t kMaxChars = 64;
+
+// where a corner's text sits: x and its top as shares of the page
+struct CornerPlace {
+    float x;
+    float top;
+    float scale;
+    uint32_t align;
+};
+// the frame rate as on the other recomps, 8 lines in on a page 480 high; the skip prompt inside the letterbox
+constexpr CornerPlace kTopLeftPlace = {0.009f, 0.016f, 0.6f, kAlignLeft};
+constexpr CornerPlace kTopRightPlace = {0.94f, 0.07f, 0.8f, kAlignRight};
 
 // memory the text manager reads: the position, then the text
 uint32_t Scratch() {
@@ -78,20 +89,21 @@ struct Place {
     float y;
 };
 
-Place TopLeft(uint32_t manager) {
+Place PagePlace(uint32_t manager, const CornerPlace& corner) {
     using namespace kernel;
     float width = G<float>(manager + kManagerPageWidth);
     float height = G<float>(manager + kManagerPageHeight);
     uint32_t font = R32(manager + kManagerFont);
-    float text_height = float(int32_t(R32(font + kFontHeight))) * G<float>(manager + kManagerGlyphScale) * kScale;
-    return {kLeft * width, height * (1.0f - kTop) - text_height};
+    float glyph_scale = G<float>(manager + kManagerGlyphScale);
+    float text_height = float(int32_t(R32(font + kFontHeight))) * glyph_scale * corner.scale;
+    return {corner.x * width, height * (1.0f - corner.top) - text_height};
 }
 
-void Show(X86Context& ctx, uint32_t colour, Place place, uint32_t position, uint32_t text) {
+void Show(X86Context& ctx, uint32_t colour, Place place, uint32_t position, uint32_t text, const CornerPlace& corner) {
     kernel::G<float>(position) = place.x;
     kernel::G<float>(position + 4) = place.y;
     kernel::CallGuest(ctx, kSetColour, {colour});
-    kernel::CallGuest(ctx, kDrawText, {position, Bits(kScale), text, kAlignLeft});
+    kernel::CallGuest(ctx, kDrawText, {position, Bits(corner.scale), text, corner.align});
 }
 
 // the counter's own font, whatever the game drew last; returns the font to put back
@@ -122,36 +134,42 @@ void BeginOverlay(X86Context& ctx, uint32_t manager, uint32_t camera) {
 
 }  // namespace
 
-// the frame is finished and about to be shown
-void DrawFps(X86Context& ctx, uint8_t*) {
+// text over the finished frame in the HUD's own 2D state; Latin 1, as the game's text is
+void DrawCornerText(X86Context& ctx, std::string_view line, Corner corner) {
     using namespace kernel;
     uint32_t manager = R32(kTextManager);
     uint32_t cam = R32(kCamera);
-    if (!game::Opt().fps_counter || !manager || !cam) return;
-    if (!R32(manager + kManagerFont)) return;
+    if (!manager || !cam || !R32(manager + kManagerFont)) return;
     uint32_t position = Scratch();
     uint32_t text = position + 8;
-    char line[kMaxChars];
-    std::snprintf(line, sizeof(line), "FPS: %.1f", double(game::g_fps.load()));
-    for (uint32_t i = 0; i < kMaxChars; i++) {
-        G<char>(text + i) = line[i];
-        if (!line[i]) break;
-    }
+    size_t length = std::min<size_t>(line.size(), kMaxChars - 1);
+    for (size_t i = 0; i < length; i++) G<char>(text + uint32_t(i)) = line[i];
+    G<char>(text + uint32_t(length)) = 0;
+    const CornerPlace& place_at = corner == Corner::TopLeft ? kTopLeftPlace : kTopRightPlace;
     uint32_t frame_ecx = ctx.ecx;
     ctx.ecx = R32(kOverlayCameras);
     uint32_t overlay = ctx.ecx ? CallGuest(ctx, kOverlayCamera, {cam}) : cam;
     BeginOverlay(ctx, manager, overlay);
     uint32_t previous_font = ApplyFont(ctx, manager);
-    Place place = TopLeft(manager);
+    Place place = PagePlace(manager, place_at);
     Place shadow = {place.x + kShadowX * G<float>(manager + kManagerPageWidth),
                     place.y - kShadowY * G<float>(manager + kManagerPageHeight)};
-    HudAnchorLeft(true);
+    if (corner == Corner::TopLeft) HudAnchorLeft(true);
+    else HudAnchorRight(true);
     ctx.ecx = manager;  // the text manager's calls are thiscall
-    Show(ctx, kBlack, shadow, position, text);
-    Show(ctx, kWhite, place, position, text);
+    Show(ctx, kBlack, shadow, position, text, place_at);
+    Show(ctx, kWhite, place, position, text, place_at);
     HudAnchorLeft(false);
     W32(manager + kManagerFont, previous_font);
     CallGuest(ctx, kPopMatrix2d, {});
     CallGuest(ctx, kEndUpdate, {overlay});
     ctx.ecx = frame_ecx;
+}
+
+// the frame is finished and about to be shown
+void DrawFps(X86Context& ctx, uint8_t*) {
+    if (!game::Opt().fps_counter) return;
+    char line[kMaxChars];
+    std::snprintf(line, sizeof(line), "FPS: %.1f", double(game::g_fps.load()));
+    DrawCornerText(ctx, line, Corner::TopLeft);
 }

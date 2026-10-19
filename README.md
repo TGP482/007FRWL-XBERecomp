@@ -35,6 +35,7 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 - **Controller** - Controller with SDL3 support. Defaults match the Xbox layout.
 
 ### General
+- **Skippable Cutscenes** - Allows the in game cutscenes to be skipped with ESC or the Start button.
 - **Pause On Focus Loss** - Pauses the game and its sound while the window is in the background or minimized.
 
 ### Miscellaneous

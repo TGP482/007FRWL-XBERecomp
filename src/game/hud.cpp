@@ -185,6 +185,7 @@ void DrawSideBars(X86Context& ctx, uint32_t type, uint32_t vertices, uint32_t co
 }  // namespace
 
 void HudAnchorLeft(bool on) { g_anchor = on && game::Wide() ? kLeft : kOff; }
+void HudAnchorRight(bool on) { g_anchor = on && game::Wide() ? kRight : kOff; }
 
 // tree walk 0x3583B0, before a widget's Draw: esi the widget, [esp] its screen position
 void HudWidgetBegin(X86Context& ctx, uint8_t*) {

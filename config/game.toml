@@ -371,6 +371,11 @@ call = "AmbientOcclusion"
 at = 0x34D094
 call = "DrawFps"
 
+# the same place: the cutscene skip prompt, top right
+[[hook]]
+at = 0x34D094
+call = "DrawSkipPrompt"
+
 # UI widget tree walk, around each widget's Draw: the HUD keeps its shape on widescreen
 [[hook]]
 at = 0x358423

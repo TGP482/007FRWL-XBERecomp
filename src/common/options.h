@@ -11,6 +11,7 @@ inline constexpr const char* kLanguages[] = {"int", "fra", "deu", "ita", "esp"};
 
 struct Options {
     bool skip_intros = false;
+    bool skippable_cutscenes = true;  // Start or its key ends an in game cutscene
     bool fps_counter = false;
     bool hdr_output = true;  // HDR10 on a display with Windows HDR on
     bool invert_mouse = false;

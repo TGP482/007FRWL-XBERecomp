@@ -46,6 +46,7 @@ constexpr Entry kEntries[] = {
     {"DRAW DISTANCE", {u"Distance d'affichage", u"Sichtweite", u"Distanza visiva", u"Distancia de dibujado"}},
     {"AMBIENT OCCLUSION", {u"Occlusion ambiante", u"Ambient Occlusion", u"Occlusione ambientale", u"Oclusión ambiental"}},
     {"SKIP INTROS", {u"Passer les intros", u"Intros überspringen", u"Salta introduzione", u"Saltar introducción"}},
+    {"SKIPPABLE CUTSCENES", {u"Cinématiques passables", u"Überspringbare Zwischensequenzen", u"Filmati saltabili", u"Escenas saltables"}},
     {"PAUSE ON FOCUS LOSS", {u"Pause en arrière-plan", u"Pause im Hintergrund", u"Pausa in background", u"Pausa en segundo plano"}},
     {"LANGUAGE", {u"Langue", u"Sprache", u"Lingua", u"Idioma"}},
     {"AUDIO OUTPUT", {u"Sortie audio", u"Audioausgabe", u"Uscita audio", u"Salida de audio"}},
@@ -73,6 +74,9 @@ constexpr Entry kEntries[] = {
     {"GERMAN", {u"Allemand", u"Deutsch", u"Tedesco", u"Alemán"}},
     {"ITALIAN", {u"Italien", u"Italienisch", u"Italiano", u"Italiano"}},
     {"SPANISH", {u"Espagnol", u"Spanisch", u"Spagnolo", u"Español"}},
+
+    // the cutscene skip prompt
+    {"Skip", {u"Passer", u"Überspringen", u"Salta", u"Saltar"}},
 
     // MOUSE AND KEYBOARD rows
     {"MOUSE SENSITIVITY", {u"Sensibilité de la souris", u"Mausempfindlichkeit", u"Sensibilità del mouse", u"Sensibilidad del ratón"}},

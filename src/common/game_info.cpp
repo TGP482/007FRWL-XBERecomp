@@ -20,6 +20,8 @@
 #include "common/saves.h"
 #include "core/input.h"
 
+void TakeCutsceneSkip(int port, input::Pad& pad);  // cutscenes.cpp
+
 namespace game {
 
 namespace {
@@ -106,6 +108,7 @@ void Pad(int port, input::Pad& pad) {
     } else if (port == 0) {
         input::Keyboard(pad);
     }
+    TakeCutsceneSkip(port, pad);
 }
 
 // no vibration while the keyboard and mouse are in use
@@ -179,6 +182,7 @@ const app::GameInfo app::kGame = {
         {"invert_mouse", &game::Opt().invert_mouse, nullptr},
         {"camera_centring", &game::Opt().camera_centring, nullptr},
         {"skip_intros", &game::Opt().skip_intros, nullptr},
+        {"skippable_cutscenes", &game::Opt().skippable_cutscenes, nullptr},
         {"fps_counter", &game::Opt().fps_counter, nullptr},
         {"hdr_output", &game::Opt().hdr_output, nullptr},
         {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},
