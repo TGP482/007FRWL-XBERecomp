@@ -37,6 +37,7 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 
 ### General
 - **Skippable Cutscenes** - Allows the in game cutscenes to be skipped with ESC or the Start button.
+- **Persistent Bodies** - Prevents the bodies of killed enemies, and the guns and shields they drop, from disappearing.
 - **Pause On Focus Loss** - Pauses the game and its sound while the window is in the background or minimized.
 
 ### Miscellaneous

@@ -267,6 +267,7 @@ const app::GameInfo app::kGame = {
         {"free_aim", &game::Opt().free_aim, nullptr},
         {"skip_intros", &game::Opt().skip_intros, nullptr},
         {"skippable_cutscenes", &game::Opt().skippable_cutscenes, nullptr},
+        {"persistent_bodies", &game::Opt().persistent_bodies, nullptr},
         {"fps_counter", &game::Opt().fps_counter, nullptr},
         {"hdr_output", &game::Opt().hdr_output, nullptr},
         {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},

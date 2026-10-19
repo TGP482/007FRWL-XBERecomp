@@ -475,6 +475,18 @@ at = 0x358423
 call = "HudWidgetShown"
 on_false = 0x358426
 
+# enemy death done, after the corpse leaves the collision: persistent bodies skip the fades that delete the body
+[[hook]]
+at = 0x46D82
+call = "KeepCorpse"
+on_true = 0x46DC1
+
+# item dropped, before its fade timer is set
+[[hook]]
+at = 0xA6FC5
+call = "KeepDroppedItem"
+on_true = 0xA6FD8
+
 # film update: no wait for each film frame, the shown frame is held until the next is due
 [[hook]]
 at = 0x362CC5
