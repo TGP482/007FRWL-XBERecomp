@@ -27,9 +27,9 @@ struct Answer {
 constexpr Answer kAnswers[] = {
     // basic_player
     {0x7DDCA04E, Section::Foot, {"jump"}},              // jump
-    {0x2A1213D2, Section::Foot, {"jump"}},              // vault
-    {0x97DEE18E, Section::Foot, {"jump"}},              // step_up
-    {0xF7E02080, Section::Foot, {"jump"}},              // vault_and_climb
+    {0x2A1213D2, Section::Foot, {"jump", "interact"}},  // vault
+    {0x97DEE18E, Section::Foot, {"jump", "interact"}},  // step_up
+    {0xF7E02080, Section::Foot, {"jump", "interact"}},  // vault_and_climb
     {0x196A4515, Section::Foot, {"jump", "interact"}},  // climb
     {0xC4CCF1F7, Section::Foot, {"interact"}},          // use_object
     {0xA2D67105, Section::Foot, {"interact"}},          // enter_vehicle
@@ -38,6 +38,8 @@ constexpr Answer kAnswers[] = {
     // item_select_hud
     {0x9D72D5CB, Section::Inventory, {"inventory_up"}},      // itemselect_up
     {0x3453D1D2, Section::Inventory, {"inventory_down"}},    // itemselect_down
+    {0xA38CB897, Section::Inventory, {"inventory_left"}},    // itemselect_left
+    {0x4A4FF72C, Section::Inventory, {"inventory_right"}},   // itemselect_right
     {0x2E6B9A8C, Section::Inventory, {"inventory_select"}},  // itemselect_select
     {0x18078D8A, Section::Inventory, {"inventory_cancel"}},  // itemselect_cancel
     // AstonMartinPlayerDriver; the steering is the left stick's
@@ -47,11 +49,10 @@ constexpr Answer kAnswers[] = {
     {0x8E0025CB, Section::Car, {"car_steer_right"}},   // steerright
     {0x24A64FDC, Section::Car, {"car_handbrake"}},     // handbrake
     {0x4E7F3FB2, Section::Car, {"car_fire"}},          // fireweapon
+    // a press picks the next target, holding keeps the lock, both on LT as on the console
     {0x7FC16C7C, Section::Car, {"car_target_lock"}},   // targetlock
-    {0xAC012CA4, Section::Car, {"car_next_target"}},   // nexttarget
+    {0xAC012CA4, Section::Car, {"car_target_lock"}},   // nexttarget
     {0x600284C2, Section::Car, {"car_cycle_weapon"}},  // cycleweapon
-    {0x42D8C8B3, Section::Car, {"car_gadget"}},        // usegadget
-    {0xA8E12806, Section::Car, {"car_look_back"}},     // lookback
     {0x811C91EB, Section::Car, {"car_exit"}},          // exit_vehicle
     // jetpackplayer
     {0x2FC31762, Section::Jetpack, {"fly_up"}},    // thrust_up
