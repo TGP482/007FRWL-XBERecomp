@@ -9,6 +9,7 @@
 #include <mmreg.h>
 #include <xaudio2.h>
 
+#include <algorithm>
 #include <atomic>
 #include <future>
 #include <optional>
@@ -35,6 +36,7 @@ std::atomic<bool> g_mono{false};
 std::atomic<uint32_t> g_mode{kOutputAuto};
 std::atomic<bool> g_mode_changed{false};
 std::atomic<bool> g_paused{false};
+std::atomic<bool> g_muted{false};
 
 struct Output {
     IXAudio2* xa = nullptr;
@@ -193,6 +195,7 @@ void Pump(Output& out, const std::function<void(float*, uint32_t)>& render) {
         }
         float* b = &bufs[(n % kSlots) * kFrames * kChannels];
         render(b, kFrames);
+        if (g_muted) std::fill(b, b + kFrames * kChannels, 0.0f);
         XAUDIO2_BUFFER xb{};
         xb.AudioBytes = kFrames * kChannels * sizeof(float);
         xb.pAudioData = reinterpret_cast<const BYTE*>(b);
@@ -212,6 +215,8 @@ void SetOutputMode(uint32_t mode) {
 }
 
 void SetPaused(bool paused) { g_paused = paused; }
+
+void SetMuted(bool muted) { g_muted = muted; }
 
 void StartOutput(std::function<void(float*, uint32_t)> render) {
     std::promise<void> opened;

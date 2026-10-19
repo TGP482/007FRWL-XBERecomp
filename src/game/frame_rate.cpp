@@ -26,6 +26,7 @@ constexpr uint32_t kMaxFrameMs = 0x7379E0;  // a longer frame slows the game dow
 constexpr uint32_t kEventOffset = 4;  // the event, from the stack pointer
 constexpr double kMinFrameMs = 0.1;  // the game floors at 1, which would run it fast above 1000 fps
 constexpr double kSecondsPerMs = 0.001;
+constexpr double kSkipFrameMs = 60.0;  // a skipped cutscene's step, past the game's own 50 ms longest frame
 
 // a counter of whole milliseconds that keeps the fraction between frames
 struct MsCounter {
@@ -99,7 +100,7 @@ void AdvanceUnscaled(double ms) {
 }
 
 void AdvanceGame(double ms) {
-    double scaled = ClampFrameMs(ms * kernel::G<float>(kTimeScale));
+    double scaled = game::g_fast_forward ? kSkipFrameMs : ClampFrameMs(ms * kernel::G<float>(kTimeScale));
     kernel::W32(kGameMs, kernel::R32(kGameMs) + g_clock.game.Advance(scaled));
     kernel::G<float>(kGameSeconds) = float(scaled * kSecondsPerMs);
     kernel::W32(kFrameCount, kernel::R32(kFrameCount) + 1);

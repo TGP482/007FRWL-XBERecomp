@@ -3,14 +3,16 @@
 #include <chrono>
 #include <string>
 
+#include "audio/output.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
 #include "game/hud.h"
 #include "game/options_menu.h"
 #include "xdk/hle.h"
 
-// Skippable cutscenes: Start, or its key, fades the picture to black as the game's own fades do, ends the cutscene's
-// sequences the way their scripts end them, then the letterbox slides away while the picture fades back.
+// Skippable cutscenes: Start, or its key, fades the picture to black as the game's own fades do, then the game plays
+// the rest of the cutscene behind it at full speed and muted, world and scripts together, so every spawn, message and
+// music change still happens. The letterbox then slides away while the picture fades back.
 
 using namespace kernel;
 
@@ -34,7 +36,6 @@ constexpr uint32_t kSlotCamera = 0x08;  // set by the camera track opcode 0x300:
 constexpr uint32_t kSlotHeld = 0x10;    // left alone by the engine's own skip check 0x40BB90
 constexpr uint32_t kSlotInstance = 0xE8;  // the sequence instance + 0x20
 constexpr uint32_t kInstanceLink = 0x20;
-constexpr uint32_t kSlotEnd = 0x40BBF0;    // thiscall(aborted, seconds), as a script's end opcode 0x100 calls it
 constexpr uint32_t kStopDialogue = 0x404BD0;  // fastcall(instance), its audio stream stops
 
 // screen fader [0x77F720]: layer 0 at +0x10 is the letterbox, layer 1 at +0x30 the colour fade
@@ -47,17 +48,20 @@ constexpr uint32_t kFadeLeaving = 0x38;
 constexpr uint32_t kFadeDone = 0x48;  // byte
 
 constexpr float kFadeSeconds = 0.5f;  // as the cutscene end's own fade 0x404D70
+constexpr float kBlackAtOnceSeconds = 0.01f;
 constexpr float kLetterboxDefaultSeconds = 1.0f;
-constexpr auto kEndTimeout = std::chrono::seconds(10);
+constexpr auto kFastForwardTimeout = std::chrono::seconds(120);  // a cutscene that never ends is shown
+constexpr int kTicklessFrames = 30;  // a cutscene that ends the level stops the sequencer before it ends itself
 
 constexpr uint16_t kPadStart = 0x10;
 constexpr int kStartButton = 12;  // input::ButtonKey numbering
 constexpr int kPorts = 4;
 
-enum class Skip { Idle, FadingOut, Ending };
+enum class Skip { Idle, FadingOut, FastForward };
 
 Skip g_skip = Skip::Idle;
-std::chrono::steady_clock::time_point g_ending_since;
+std::chrono::steady_clock::time_point g_since;
+int g_frames_without_tick = 0;
 std::atomic<bool> g_pressed{false};
 std::atomic<bool> g_held[kPorts] = {};
 
@@ -80,6 +84,12 @@ bool Black() {
     return R32(fader + kFadeLeaving) == 0 && G<uint8_t>(fader + kFadeDone);
 }
 
+// black or still fading to it
+bool FadeShown() {
+    uint32_t fader = R32(kFader);
+    return fader && G<uint8_t>(fader + kFadeShown) && R32(fader + kFadeLeaving) == 0;
+}
+
 bool LetterboxShown() {
     uint32_t fader = R32(kFader);
     return fader && G<uint8_t>(fader + kLetterboxShown) && R32(fader + kLetterboxLeaving) == 0;
@@ -89,19 +99,27 @@ void FadeOut(X86Context& ctx) {
     if (!Black()) CallGame(ctx, kFadeToColour, {0, 0, 0, Bits(kFadeSeconds)});
 }
 
-void EndCutsceneSequences(X86Context& ctx) {
+// the cutscene's next shots fade themselves in, so the picture goes straight back to black
+void EnsureBlack(X86Context& ctx) {
+    if (g_skip == Skip::FastForward && !Black()) CallGame(ctx, kFadeToColour, {0, 0, 0, Bits(kBlackAtOnceSeconds)});
+}
+
+bool CutsceneSlot(uint32_t slot) {
+    uint32_t flags = R32(slot);
+    return (flags & kSlotRunning) && (flags & kSlotCamera) && !(flags & kSlotHeld);
+}
+
+void StopDialogue(X86Context& ctx, uint32_t slot) {
+    uint32_t link = R32(slot + kSlotInstance);
+    if (link <= kInstanceLink) return;
+    ctx.ecx = link - kInstanceLink;
+    CallGuest(ctx, kStopDialogue, {});
+}
+
+void StopCutsceneDialogue(X86Context& ctx) {
     for (uint32_t i = 0; i < kSlotCount; i++) {
         uint32_t slot = kSlots + i * kSlotSize;
-        uint32_t flags = R32(slot);
-        bool cutscene = (flags & kSlotRunning) && (flags & kSlotCamera) && !(flags & kSlotHeld);
-        if (!cutscene) continue;
-        uint32_t link = R32(slot + kSlotInstance);
-        if (link > kInstanceLink) {
-            ctx.ecx = link - kInstanceLink;
-            CallGuest(ctx, kStopDialogue, {});
-        }
-        ctx.ecx = slot;
-        CallGuest(ctx, kSlotEnd, {0, Bits(0.0f)});
+        if (CutsceneSlot(slot)) StopDialogue(ctx, slot);
     }
 }
 
@@ -112,11 +130,23 @@ void FadeBack(X86Context& ctx) {
         if (!(seconds > 0)) seconds = kLetterboxDefaultSeconds;
         CallGame(ctx, kLetterboxOff, {Bits(seconds)});
     }
-    if (Black()) CallGame(ctx, kFadeFromColour, {0, 0, 0, Bits(kFadeSeconds)});
+    if (FadeShown()) CallGame(ctx, kFadeFromColour, {0, 0, 0, Bits(kFadeSeconds)});
+}
+
+void ApplyFastForward(bool on) {
+    game::g_fast_forward = on;
+    audio::SetMuted(on);
+}
+
+void Finish(X86Context& ctx) {
+    ApplyFastForward(false);
+    FadeBack(ctx);
+    g_skip = Skip::Idle;
 }
 
 void UpdateSkip(X86Context& ctx) {
     bool pressed = g_pressed.exchange(false);
+    auto waited = std::chrono::steady_clock::now() - g_since;
     switch (g_skip) {
         case Skip::Idle:
             if (pressed && Offered()) {
@@ -129,18 +159,17 @@ void UpdateSkip(X86Context& ctx) {
                 FadeBack(ctx);
                 g_skip = Skip::Idle;
             } else if (Black()) {
-                g_ending_since = std::chrono::steady_clock::now();
-                g_skip = Skip::Ending;
+                g_since = std::chrono::steady_clock::now();
+                ApplyFastForward(true);
+                g_skip = Skip::FastForward;
             }
             break;
-        case Skip::Ending:
-            // a chained sequence starts as the last one ends, and a cutscene can wait on its stream set
-            if (Playing() && std::chrono::steady_clock::now() - g_ending_since < kEndTimeout) {
-                EndCutsceneSequences(ctx);
-                break;
+        case Skip::FastForward:
+            if (!Playing() || waited >= kFastForwardTimeout) {
+                Finish(ctx);
+            } else {
+                StopCutsceneDialogue(ctx);
             }
-            FadeBack(ctx);
-            g_skip = Skip::Idle;
             break;
     }
 }
@@ -169,12 +198,16 @@ void TakeCutsceneSkip(int port, input::Pad& pad) {
 X86_EXTERN_FUNC(__imp__sub_004047F0);
 X86_FUNC(sub_004047F0) {
     uint32_t tick_ecx = ctx.ecx;
+    g_frames_without_tick = 0;
     UpdateSkip(ctx);
     ctx.ecx = tick_ecx;
     __imp__sub_004047F0(ctx, base);
+    EnsureBlack(ctx);
 }
 
 // end of the frame render, over the finished frame
 void DrawSkipPrompt(X86Context& ctx, uint8_t*) {
+    bool skipping = g_skip != Skip::Idle;
+    if (skipping && ++g_frames_without_tick > kTicklessFrames) Finish(ctx);
     if (g_skip == Skip::Idle && Offered()) DrawCornerText(ctx, PromptText(), Corner::TopRight);
 }

@@ -3392,6 +3392,7 @@ bool D3D12Backend::AssembleDraw(const State& s, uint32_t prim, uint32_t start, u
 }
 
 void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) {
+    if (game::g_fast_forward) return;  // a skipped cutscene plays on unseen
     PerfScope perf_draw{g_perf.draw};
     g_perf.draws++;
     if (cap_) CapStep(s.rt);
@@ -4298,6 +4299,7 @@ void D3D12Backend::Present(const Surface& front) {
     // effect's intermediate passes flash on screen
     auto now_t = std::chrono::steady_clock::now();
     bool hold = skipped_frame_ && shown_ && now_t - shown_t_ < kHoldMax;
+    hold = hold || game::g_fast_forward;  // a skipped cutscene plays on unseen, the black frame stays up
     skipped_frame_ = false;
     uint32_t bi = swap_->GetCurrentBackBufferIndex();
     if (!hold) DrawFrame(t, bi);

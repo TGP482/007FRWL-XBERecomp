@@ -34,5 +34,7 @@ constexpr uint32_t kOutputMono = 3;
 void SetOutputMode(uint32_t mode);
 // any thread: paused, the output stops and the mixer is not run, so every voice and stream keeps its place
 void SetPaused(bool paused);
+// any thread: muted, the mixer keeps running and its output is silence
+void SetMuted(bool muted);
 
 }  // namespace audio
