@@ -19,7 +19,6 @@
 #include "common/aspect.h"
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
-#include "core/log.h"
 #include "game/flash.h"
 #include "game/menu_ports.h"
 #include "game/options_menu.h"
@@ -573,28 +572,6 @@ Point StagePoint(const input::Pointer& cursor) {
     return {x * G<float>(kStageWidth), cursor.y * G<float>(kStageHeight)};
 }
 
-// TEMPORARY: item boxes as the cursor tests them
-void TraceItems(X86Context& ctx, uint32_t screen, const Items& items, Point stage, std::optional<uint32_t> hit) {
-    static uint32_t traced = 0;
-    static std::optional<uint32_t> last_hit;
-    if (screen != traced) {
-        traced = screen;
-        for (size_t i = 0; i < items.clips.size(); i++) {
-            uint32_t clip = items.clips[i];
-            std::optional<Box> box = StageBox(ctx, clip);
-            Box local = LocalBox(ctx, clip);
-            const char* label = FrameLabel(clip);
-            LOGR("menu trace: item %zu %s label %s stage %.1f %.1f %.1f %.1f local %.1f %.1f %.1f %.1f", i,
-                 Name(clip), label ? label : "-", box ? box->left : NAN, box ? box->top : NAN, box ? box->right : NAN,
-                 box ? box->bottom : NAN, local.left, local.top, local.right, local.bottom);
-        }
-    }
-    if (hit == last_hit) return;
-    last_hit = hit;
-    LOGR("menu trace: cursor %.1f %.1f hit %d focus %u", stage.x, stage.y, hit ? int(*hit) : -1,
-         R32(screen + kScreenFocus));
-}
-
 // acting
 
 input::PageKeys KeysOf(uint32_t screen) {
@@ -641,7 +618,6 @@ void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
     LatchFocusedClip(screen, focused <= last ? items->clips[focused] : 0);
     Extent usual = UsualExtent(ctx, items->clips);
     std::optional<uint32_t> hit = ItemAt(ctx, items->clips, stage, usual);
-    TraceItems(ctx, screen, *items, stage, hit);
     bool tabs = IsPauseTabs(screen);
     if (!hit && tabs) hit = ExtraTabAt(ctx, items->clips, stage, usual);
     if (!hit) return;
@@ -673,53 +649,6 @@ Edges LatchEdges(uint32_t screen, const input::Pointer& cursor) {
     return edges;
 }
 
-// TEMPORARY: logs each menu page the cursor meets and its clip tree
-constexpr bool kTraceMenus = true;
-
-void TraceClips(uint32_t clip, int level) {
-    std::vector<uint32_t> children = Children(clip);
-    for (uint32_t child : children) {
-        const char* label = FrameLabel(child);
-        LOGR("menu trace: %*s%s type %u depth %d shown %d label %s", level * 2, "", Name(child), Type(child),
-             Depth(child), Shown(child) ? 1 : 0, label ? label : "-");
-        if (level < kSearchDepth) TraceClips(child, level + 1);
-    }
-}
-
-void TraceKeyboardListeners() {
-    uint32_t manager = R32(kListenerManager);
-    int keyboard = input::KeyboardPort();
-    LOGR("menu trace: no menu screen, keyboard port %d", keyboard);
-    uint32_t first = manager ? R32(manager + kManagerFirst) : 0;
-    uint32_t end = manager ? R32(manager + kManagerEnd) : 0;
-    for (uint32_t at = first; first && at < end; at += 4) {
-        uint32_t listener = R32(at);
-        uint32_t owner = R32(listener + kListenerOwner);
-        LOGR("menu trace: listener %08X vtable %08X codes %08X ports %08X held %u owner %08X owner vtable %08X",
-             listener, R32(listener), R32(listener + kListenerCodes), R32(listener + kListenerPorts),
-             R32(listener + kListenerHeld), owner, Readable(owner) ? R32(owner) : 0);
-    }
-}
-
-void TraceScreen(uint32_t screen) {
-    static uint32_t traced = UINT32_MAX;
-    if (!kTraceMenus || screen == traced) return;
-    traced = screen;
-    if (!screen) return TraceKeyboardListeners();
-    uint32_t script = R32(screen + kScreenScript);
-    uint32_t path = script ? R32(script + kScriptPath) : 0;
-    uint32_t handler = R32(screen + kScreenInputHandler);
-    const char* path_text = Readable(path) ? Text(path) : "-";
-    const char* handler_text = Readable(handler) ? Text(handler) : "-";
-    std::optional<Items> items = FindItems(screen);
-    LOGR("menu trace: screen %08X path %s rows %u columns %u count %u focus %u accept %d cancel %d handler %s items %d",
-         screen, path_text, R32(screen + kScreenRows), R32(screen + kScreenColumns), R32(screen + kScreenCount),
-         R32(screen + kScreenFocus), int(R32(screen + kScreenAccept)), int(R32(screen + kScreenCancel)), handler_text,
-         items ? int(items->clips.size()) : -1);
-    uint32_t page = Readable(path) ? Resolve(Text(path)) : 0;
-    if (page) TraceClips(page, 0);
-}
-
 void UpdateMenu(uint32_t screen) {
     uint64_t now = NowMs();
     if (screen) g_state.menu_ms = now;
@@ -729,7 +658,6 @@ void UpdateMenu(uint32_t screen) {
 void UpdateCursor(X86Context& ctx) {
     // the attache case takes the bound keys and mouse buttons as play does
     uint32_t screen = CaseShown() ? 0 : MenuScreen();
-    TraceScreen(screen);
     UpdateMenu(screen);
     bool row = screen && R32(screen + kScreenRows) == 1 && R32(screen + kScreenColumns) > 1;
     input::SetMenuWheelAcross(row);

@@ -13,5 +13,7 @@ void PointPauseTab(int tab);            // the cursor is on a tab
 void PauseTabsFocus(X86Context& ctx);   // in the pad's turn
 bool TakePauseTabButton(X86Context& ctx, uint32_t screen, uint32_t code);
 bool HoldPauseTabButton(uint32_t screen);  // a held direction does not repeat past the stock tabs
-const char* PauseTabLabel();  // the text a field drawn now shows instead of its own, else null
+const char* PauseTabLabel();  // the text a field drawn now shows instead of its own, in the game's text, else null
 bool DrawingPauseTab();       // a stock tab of the column draws now
+const char* PauseTabTitle();  // the recomp tab focused, in the game's text, else null
+int PauseTabPage();           // the page of the recomp tab focused, else -1

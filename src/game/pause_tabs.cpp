@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "game/flash.h"
@@ -34,28 +36,44 @@ constexpr int kLabelDepths[kStockTabs] = {162, 121, 82, 43};
 constexpr int kLastTab = kStockTabs - 1;
 constexpr int kTabCount = kStockTabs + kExtraTabs;
 const char* const kLabels[kExtraTabs] = {"RECOMP", "M & K", "CONTROLLER"};  // pages in rows::Page order
+const char* const kStar = "star_mc";  // beside the focused tab
+const char* const kBorder = "border_mc";  // drawn after every tab, the recomp's tabs just before it
 
 // a child clip draw, cdecl (renderer, clip, mask)
 constexpr uint32_t kDrawChild = 0x309875;
 constexpr uint32_t kDrawChildAlt = 0x3098D6;  // used while bit 2 of 0x8125A8 is set
+constexpr uint32_t kClipX = kClipMatrix + 4 * 4;
 constexpr uint32_t kClipY = kClipMatrix + 5 * 4;
 
 using Draw = void (*)(X86Context&, uint8_t*);
 
+using Clips = std::array<uint32_t, kStockTabs>;
+using Places = std::array<float, kStockTabs>;
+
 struct Column {
-    std::array<uint32_t, kStockTabs> plates{};
-    std::array<uint32_t, kStockTabs> labels{};
-    float step = 0.0f;
+    Clips plates{};
+    Clips labels{};
+    int blue = 0;  // the blue tab copies are made from
 };
 
 struct Tabs {
     uint32_t screen = 0;
     int tab = 0;  // the focused tab, past the last stock one on a recomp tab
     bool moved = false;  // the cursor went to another recomp tab: its sound plays in the pad's turn
+    int stock = -1;        // the stock focus last frame
+    uint32_t frame = 0;
+    std::array<uint32_t, kStockTabs> changed{};  // the frame each tab last gained or lost the focus
+    // a blue tab's x at rest, from one not focused since the menu opened: a focus slides a tab right and back
+    std::optional<float> plate_x;
+    std::optional<float> label_x;
 };
 
 Tabs g_tabs;
-const char* g_label = nullptr;
+// the stock tabs' heights as last seen: they keep them, but a focus change swaps some clips out for a moment
+Places g_plate_y{};
+Places g_label_y{};
+std::string g_label;  // the text a tab label copy shows, in the game's text
+bool g_relabel = false;
 bool g_drawing = false;
 bool g_column = false;  // a stock tab of the column draws
 
@@ -87,47 +105,119 @@ bool HasNamed(const std::vector<uint32_t>& clips, const char* name) {
     });
 }
 
-// the column the clip is part of, when its page is the pause menu
-bool FindColumn(uint32_t clip, Column& column) {
-    uint32_t parent = R32(clip + kClipParent);
-    if (!IsTabDepth(Depth(clip)) || !Readable(parent)) return false;
-    std::vector<uint32_t> children = Children(parent);
-    if (!HasNamed(children, "options_mc") || !HasNamed(children, "border_mc")) return false;
+// the tab whose focus changed longest ago: a tab's look animates for a while after its focus changes
+int RestingTab(const Column& column, int stock) {
+    int best = -1;
+    for (int tab = 0; tab < kStockTabs; tab++) {
+        if (tab == stock || !column.plates[size_t(tab)] || !column.labels[size_t(tab)]) continue;
+        if (best < 0 || g_tabs.changed[size_t(tab)] < g_tabs.changed[size_t(best)]) best = tab;
+    }
+    return best;
+}
+
+float ClipY(uint32_t clip) { return G<float>(clip + kClipY); }
+
+// a tab's place: the stock ones where they are, focused or not, the recomp ones a step apart past the last
+float TabY(const Places& places, int tab) {
+    if (tab <= kLastTab) return places[size_t(tab)];
+    float first = places[0];
+    float last = places[kLastTab];
+    return last + (last - first) / kLastTab * float(tab - kLastTab);
+}
+
+// how far a copy of tab from's clip moves to tab's place
+float MoveBy(const Places& places, int from, int tab) { return TabY(places, tab) - places[size_t(from)]; }
+
+float ClipX(uint32_t clip) { return G<float>(clip + kClipX); }
+
+// the first tab seen that was never focused gives the rest x
+void LatchRestX(const Column& column, int stock) {
+    for (int tab = 0; tab < kStockTabs && !g_tabs.plate_x; tab++) {
+        bool never = tab != stock && g_tabs.changed[size_t(tab)] == 0;
+        if (!never || !column.plates[size_t(tab)] || !column.labels[size_t(tab)]) continue;
+        g_tabs.plate_x = ClipX(column.plates[size_t(tab)]);
+        g_tabs.label_x = ClipX(column.labels[size_t(tab)]);
+    }
+}
+
+// the tab column of the page, when the page is the pause menu
+bool ColumnOf(uint32_t page, Column& column) {
+    if (!Readable(page)) return false;
+    std::vector<uint32_t> children = Children(page);
+    if (!HasNamed(children, "options_mc") || !HasNamed(children, kBorder)) return false;
     for (int i = 0; i < kStockTabs; i++) {
         column.plates[i] = AtDepth(children, kPlateDepths[i]);
         column.labels[i] = AtDepth(children, kLabelDepths[i]);
-        if (!column.plates[i] || !column.labels[i]) return false;
+        if (column.plates[i]) g_plate_y[size_t(i)] = ClipY(column.plates[i]);
+        if (column.labels[i]) g_label_y[size_t(i)] = ClipY(column.labels[i]);
     }
-    float top = G<float>(column.labels[0] + kClipY);
-    column.step = (G<float>(column.labels[kLastTab] + kClipY) - top) / kLastTab;
-    return true;
+    column.blue = RestingTab(column, StockIndex());
+    LatchRestX(column, StockIndex());
+    return column.blue >= 0;
+}
+
+// the column the clip is part of: a tab's plate or label, or the star beside them
+bool FindColumn(uint32_t clip, Column& column) {
+    bool tab = IsTabDepth(Depth(clip)) || HasNamed({clip}, kStar) || HasNamed({clip}, kBorder);
+    return tab && ColumnOf(R32(clip + kClipParent), column);
 }
 
 // the clip drawn moved down by some tabs
-void DrawMoved(X86Context& ctx, uint32_t draw, const uint32_t args[3], uint32_t clip, float by) {
+// the clip drawn moved down, and at the x given
+void DrawMoved(X86Context& ctx, uint32_t draw, const uint32_t args[3], uint32_t clip, float by,
+               std::optional<float> at = std::nullopt) {
+    float& x = G<float>(clip + kClipX);
     float& y = G<float>(clip + kClipY);
-    float saved = y;
+    float saved_x = x;
+    float saved_y = y;
     y += by;
+    if (at) x = *at;
     g_drawing = true;
     CallGuest(ctx, draw, {args[0], clip, args[2]});
     g_drawing = false;
-    y = saved;
+    x = saved_x;
+    y = saved_y;
 }
 
-// a blue plate to copy: one the stock focus is not on
-int BlueTab(int stock) { return stock == 0 ? 1 : 0; }
+
+// the text a tab label shows, from its own text field
+std::string ShownText(uint32_t label) {
+    for (uint32_t child : Children(label)) {
+        uint32_t field = EditTextField(child);
+        if (!field) continue;
+        uint32_t text = R32(field + kFieldShownText);
+        if (!Readable(text) || !*Text(text)) text = R32(field + kFieldText);
+        return Readable(text) ? Text(text) : "";
+    }
+    return "";
+}
+
+// a blue label copy in a tab's place, with the text given
+void DrawLabel(X86Context& ctx, uint32_t draw, const uint32_t args[3], uint32_t from, float by, std::string text,
+               std::optional<float> at) {
+    g_label = std::move(text);
+    g_relabel = true;
+    DrawMoved(ctx, draw, args, from, by, at);
+    g_relabel = false;
+}
 
 // the recomp's tabs, after the column's last stock clip so their plates and labels keep the column's order
 void DrawExtraTabs(X86Context& ctx, uint32_t draw, const uint32_t args[3], const Column& column, int stock) {
-    auto from = [&](int tab) { return tab == g_tabs.tab ? stock : BlueTab(stock); };
+    // the red copy keeps its source's slide, blue ones sit at rest
+    auto red = [&](int tab) { return tab == g_tabs.tab; };
+    auto from = [&](int tab) { return red(tab) ? stock : column.blue; };
     for (int tab = kStockTabs; tab < kTabCount; tab++) {
-        DrawMoved(ctx, draw, args, column.plates[from(tab)], column.step * float(tab - from(tab)));
+        uint32_t plate = column.plates[size_t(from(tab))];
+        std::optional<float> at = red(tab) ? std::nullopt : g_tabs.plate_x;
+        if (plate) DrawMoved(ctx, draw, args, plate, MoveBy(g_plate_y, from(tab), tab), at);
     }
     for (int tab = kStockTabs; tab < kTabCount; tab++) {
-        g_label = kLabels[tab - kStockTabs];
-        DrawMoved(ctx, draw, args, column.labels[from(tab)], column.step * float(tab - from(tab)));
+        uint32_t label = column.labels[size_t(from(tab))];
+        if (!label) continue;
+        float by = MoveBy(g_label_y, from(tab), tab);
+        std::optional<float> at = red(tab) ? std::nullopt : g_tabs.label_x;
+        DrawLabel(ctx, draw, args, label, by, MenuText(kLabels[tab - kStockTabs]), at);
     }
-    g_label = nullptr;
 }
 
 void DrawChild(X86Context& ctx, uint8_t* base, Draw original, uint32_t draw) {
@@ -143,22 +233,41 @@ void DrawChild(X86Context& ctx, uint8_t* base, Draw original, uint32_t draw) {
         return DrawCaseButtonKeys(ctx, args[1]);
     }
     bool away = g_tabs.tab != stock;
-    if (away && args[1] == column.plates[stock]) {
-        // the red plate moves to the recomp tab, a blue one takes its place
-        int blue = BlueTab(stock);
+    if (away && HasNamed({args[1]}, kStar)) {
         X86Context saved = ctx;
-        DrawMoved(ctx, draw, args, column.plates[blue], column.step * float(stock - blue));
+        float by = TabY(g_label_y, g_tabs.tab) - TabY(g_label_y, stock);
+        DrawMoved(ctx, draw, args, args[1], by);
         ctx = saved;
         Return(ctx, 0, 0);
+        return;
+    }
+    // the red plate and its label move to the recomp tab, blue ones take their place
+    int blue = column.blue;
+    if (away && args[1] == column.plates[stock]) {
+        X86Context saved = ctx;
+        DrawMoved(ctx, draw, args, column.plates[blue], MoveBy(g_plate_y, blue, stock), g_tabs.plate_x);
+        ctx = saved;
+        Return(ctx, 0, 0);
+        return;
+    }
+    if (away && args[1] == column.labels[stock]) {
+        X86Context saved = ctx;
+        float by = MoveBy(g_label_y, blue, stock);
+        DrawLabel(ctx, draw, args, column.labels[blue], by, ShownText(args[1]), g_tabs.label_x);
+        ctx = saved;
+        Return(ctx, 0, 0);
+        return;
+    }
+    if (HasNamed({args[1]}, kBorder)) {
+        X86Context saved = ctx;
+        DrawExtraTabs(ctx, draw, args, column, stock);
+        ctx = saved;
+        original(ctx, base);
         return;
     }
     g_column = true;
     original(ctx, base);
     g_column = false;
-    if (args[1] != column.labels[0]) return;
-    X86Context saved = ctx;
-    DrawExtraTabs(ctx, draw, args, column, stock);
-    ctx = saved;
 }
 
 void Select(X86Context& ctx, int index) {
@@ -191,6 +300,12 @@ void UpdatePauseTabs(uint32_t screen) {
     int stock = int(R32(screen + kScreenIndex));
     if (screen != g_tabs.screen) g_tabs = {screen, stock};
     if (stock != kLastTab || g_tabs.tab < kLastTab) g_tabs.tab = stock;
+    g_tabs.frame++;
+    if (stock == g_tabs.stock) return;
+    for (int tab : {g_tabs.stock, stock}) {
+        if (tab >= 0 && tab < kStockTabs) g_tabs.changed[size_t(tab)] = g_tabs.frame;
+    }
+    g_tabs.stock = stock;
 }
 
 void PointPauseTab(int tab) {
@@ -224,9 +339,22 @@ bool HoldPauseTabButton(uint32_t screen) {
     return IsTabScreen(screen) && screen == g_tabs.screen && g_tabs.tab >= kLastTab;
 }
 
-const char* PauseTabLabel() { return g_label; }
+const char* PauseTabLabel() { return g_relabel ? g_label.c_str() : nullptr; }
 
 bool DrawingPauseTab() { return g_column; }
+
+int PauseTabPage() {
+    bool recomp = StockIndex() == kLastTab && g_tabs.tab > kLastTab;
+    return recomp ? g_tabs.tab - kStockTabs : -1;
+}
+
+const char* PauseTabTitle() {
+    static std::string title;
+    int page = PauseTabPage();
+    if (page < 0) return nullptr;
+    title = MenuText(kLabels[page]);
+    return title.c_str();
+}
 
 // both of the player's child draws: the tab column's clips draw the recomp's tabs with them, the attache case's
 // buttons their keys
