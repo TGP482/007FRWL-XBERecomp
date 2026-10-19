@@ -60,6 +60,14 @@ struct BoatSway {
 };
 BoatSway g_boat;
 
+// Havok solver info in the world: contacts push overlapping bodies apart at tau times the overlap over the step, a
+// speed the bodies keep, so short steps threw a shield dropped inside its holder into the air. Tau scaled by the step
+// against the console's keeps that speed as at 30 fps
+constexpr uint32_t kWorldTau = 0x164;
+constexpr uint32_t kWorldContactTau = 0x16C;
+constexpr uint32_t kStepInfo = 4;                    // from esp: seconds, then 1 / seconds
+constexpr float kConsoleStepSeconds = 1.0f / 60.0f;  // the world steps twice a frame (0x2101B0), at 30 fps 1/60 s
+
 float FrameShare() { return float(kernel::G<float>(kGameSeconds) / kConsoleFrameSeconds); }
 
 // focus pauses are no time
@@ -140,4 +148,20 @@ void BoatPitchKick(X86Context& ctx, uint8_t*) {
 void BoatKicked(X86Context& ctx, uint8_t*) {
     float& pitch = kernel::G<float>(ctx.ebx + kBoatPitch);
     pitch = g_boat.pitch + (pitch - g_boat.pitch) * FrameShare();
+}
+
+// hkWorld simulate, thiscall(world, step)
+X86_EXTERN_FUNC(__imp__sub_0028BBD0);
+X86_FUNC(sub_0028BBD0) {
+    using namespace kernel;
+    uint32_t world = ctx.ecx;
+    float seconds = G<float>(R32(ctx.esp + kStepInfo));
+    float share = std::min(1.0f, seconds / kConsoleStepSeconds);
+    float tau = G<float>(world + kWorldTau);
+    float contact_tau = G<float>(world + kWorldContactTau);
+    G<float>(world + kWorldTau) = tau * share;
+    G<float>(world + kWorldContactTau) = contact_tau * share;
+    __imp__sub_0028BBD0(ctx, base);
+    G<float>(world + kWorldTau) = tau;
+    G<float>(world + kWorldContactTau) = contact_tau;
 }
