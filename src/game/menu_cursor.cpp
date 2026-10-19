@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -18,6 +19,7 @@
 #include "common/aspect.h"
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
+#include "core/log.h"
 #include "game/flash.h"
 #include "game/menu_ports.h"
 #include "game/options_menu.h"
@@ -48,6 +50,8 @@ constexpr uint32_t kMenuScreenVtable = 0x6B1A90;
 constexpr uint32_t kScreenListener = 0x6C;
 constexpr uint32_t kScreenScript = 0x88;        // the page script's handler, +4 its clip's path
 constexpr uint32_t kScreenInputHandler = 0xA4;  // text: a script function takes the codes instead of the grid
+constexpr uint32_t kScreenRows = 0xB4;
+constexpr uint32_t kScreenColumns = 0xB8;
 constexpr uint32_t kScreenCount = 0xBC;
 constexpr uint32_t kScreenFocus = 0xC8;
 constexpr uint32_t kScreenAccept = 0xCC;  // input codes
@@ -164,6 +168,10 @@ struct CursorState {
     Order order = Order::Unknown;  // of the script's items, once their labels showed it
     uint64_t menu_ms = 0;
     Pending pending;
+    // each item's box while it is not focused: a focused rules row grows over the rows above it
+    uint32_t boxes_screen = 0;
+    uint32_t focused_clip = 0;
+    std::map<uint32_t, Box> resting;
 };
 CursorState g_state;
 
@@ -336,6 +344,17 @@ std::optional<Items> DossierTabs(const std::vector<uint32_t>& children, uint32_t
     return Items{clips};
 }
 
+// The language page's items are its unnamed text fields, one a row of its single column, top to bottom
+std::optional<Items> TextRows(const std::vector<uint32_t>& children, uint32_t count) {
+    std::vector<uint32_t> clips;
+    auto unnamed_text = [](uint32_t c) { return Type(c) == kTypeEditText && !*Name(c); };
+    std::copy_if(children.begin(), children.end(), std::back_inserter(clips), unnamed_text);
+    if (clips.size() != count) return std::nullopt;
+    auto row = [](uint32_t clip) { return (&G<float>(clip + kClipMatrix))[kMatrixY]; };
+    std::sort(clips.begin(), clips.end(), [&](uint32_t a, uint32_t b) { return row(a) < row(b); });
+    return Items{clips};
+}
+
 // the item clips a page has
 uint32_t ClipCount(uint32_t screen) {
     uint32_t count = R32(screen + kScreenCount);
@@ -362,7 +381,8 @@ std::optional<Items> FindItems(uint32_t screen) {
         if (next.empty() || next.size() > kMaxSearch) break;
         parents = std::move(next);
     }
-    return std::nullopt;
+    bool one_column = R32(screen + kScreenColumns) == 1;
+    return one_column ? TextRows(Children(Resolve(Text(path))), count) : std::nullopt;
 }
 
 // the pause menu's tab screen, not its options screen on the same page
@@ -459,6 +479,23 @@ Box LocalBox(X86Context& ctx, uint32_t clip) {
     return G<Box>(out);
 }
 
+// the focused item keeps the box it had before it took focus; the others' boxes are kept for when they take it
+Box LatchItemBox(X86Context& ctx, uint32_t clip) {
+    Box live = LocalBox(ctx, clip);
+    auto rest = g_state.resting.find(clip);
+    if (clip != g_state.focused_clip) {
+        g_state.resting[clip] = live;
+        return live;
+    }
+    return rest != g_state.resting.end() ? rest->second : live;
+}
+
+void LatchFocusedClip(uint32_t screen, uint32_t focused_clip) {
+    if (screen != g_state.boxes_screen) g_state.resting.clear();
+    g_state.boxes_screen = screen;
+    g_state.focused_clip = focused_clip;
+}
+
 Extent ExtentOf(const Box& box) { return {(box.right - box.left) / 2, (box.bottom - box.top) / 2}; }
 
 float Median(std::vector<float> values) {
@@ -472,7 +509,7 @@ Extent UsualExtent(X86Context& ctx, const std::vector<uint32_t>& clips) {
     std::vector<float> widths;
     std::vector<float> heights;
     for (uint32_t clip : clips) {
-        Extent extent = ExtentOf(LocalBox(ctx, clip));
+        Extent extent = ExtentOf(LatchItemBox(ctx, clip));
         widths.push_back(extent.half_w);
         heights.push_back(extent.half_h);
     }
@@ -485,7 +522,7 @@ Extent UsualExtent(X86Context& ctx, const std::vector<uint32_t>& clips) {
 // is left out: it is measured at the usual size around its middle
 std::optional<float> Nearness(X86Context& ctx, uint32_t clip, Point stage, Extent usual) {
     if (!StageBox(ctx, clip)) return std::nullopt;
-    Box box = LocalBox(ctx, clip);
+    Box box = LatchItemBox(ctx, clip);
     Point point = ToLocal(clip, stage);
     Extent extent = ExtentOf(box);
     Point middle = {box.left + extent.half_w, box.top + extent.half_h};
@@ -536,6 +573,28 @@ Point StagePoint(const input::Pointer& cursor) {
     return {x * G<float>(kStageWidth), cursor.y * G<float>(kStageHeight)};
 }
 
+// TEMPORARY: item boxes as the cursor tests them
+void TraceItems(X86Context& ctx, uint32_t screen, const Items& items, Point stage, std::optional<uint32_t> hit) {
+    static uint32_t traced = 0;
+    static std::optional<uint32_t> last_hit;
+    if (screen != traced) {
+        traced = screen;
+        for (size_t i = 0; i < items.clips.size(); i++) {
+            uint32_t clip = items.clips[i];
+            std::optional<Box> box = StageBox(ctx, clip);
+            Box local = LocalBox(ctx, clip);
+            const char* label = FrameLabel(clip);
+            LOGR("menu trace: item %zu %s label %s stage %.1f %.1f %.1f %.1f local %.1f %.1f %.1f %.1f", i,
+                 Name(clip), label ? label : "-", box ? box->left : NAN, box ? box->top : NAN, box ? box->right : NAN,
+                 box ? box->bottom : NAN, local.left, local.top, local.right, local.bottom);
+        }
+    }
+    if (hit == last_hit) return;
+    last_hit = hit;
+    LOGR("menu trace: cursor %.1f %.1f hit %d focus %u", stage.x, stage.y, hit ? int(*hit) : -1,
+         R32(screen + kScreenFocus));
+}
+
 // acting
 
 input::PageKeys KeysOf(uint32_t screen) {
@@ -564,16 +623,18 @@ void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
         return;
     }
     Order order = LatchOrder(screen, *items);
+    uint32_t last = uint32_t(items->clips.size()) - 1;
+    uint32_t focus = R32(screen + kScreenFocus);
+    uint32_t focused = order == Order::Reverse ? last - focus : focus;
+    LatchFocusedClip(screen, focused <= last ? items->clips[focused] : 0);
     Extent usual = UsualExtent(ctx, items->clips);
     std::optional<uint32_t> hit = ItemAt(ctx, items->clips, stage, usual);
+    TraceItems(ctx, screen, *items, stage, hit);
     bool tabs = IsPauseTabs(screen);
     if (!hit && tabs) hit = ExtraTabAt(ctx, items->clips, stage, usual);
     if (!hit) return;
-    uint32_t last = uint32_t(items->clips.size()) - 1;
     bool extra = *hit > last;
     bool options = OptionsMenuStockRows(screen) > 0;
-    uint32_t focus = R32(screen + kScreenFocus);
-    uint32_t focused = order == Order::Reverse ? last - focus : focus;
     if (!options && !extra && focused <= last && focused != *hit) {
         std::optional<float> keep = Nearness(ctx, items->clips[focused], stage, usual);
         std::optional<float> near = Nearness(ctx, items->clips[*hit], stage, usual);
@@ -602,6 +663,53 @@ Edges LatchEdges(uint32_t screen, const input::Pointer& cursor) {
     return edges;
 }
 
+// TEMPORARY: logs each menu page the cursor meets and its clip tree
+constexpr bool kTraceMenus = true;
+
+void TraceClips(uint32_t clip, int level) {
+    std::vector<uint32_t> children = Children(clip);
+    for (uint32_t child : children) {
+        const char* label = FrameLabel(child);
+        LOGR("menu trace: %*s%s type %u depth %d shown %d label %s", level * 2, "", Name(child), Type(child),
+             Depth(child), Shown(child) ? 1 : 0, label ? label : "-");
+        if (level < kSearchDepth) TraceClips(child, level + 1);
+    }
+}
+
+void TraceKeyboardListeners() {
+    uint32_t manager = R32(kListenerManager);
+    int keyboard = input::KeyboardPort();
+    LOGR("menu trace: no menu screen, keyboard port %d", keyboard);
+    uint32_t first = manager ? R32(manager + kManagerFirst) : 0;
+    uint32_t end = manager ? R32(manager + kManagerEnd) : 0;
+    for (uint32_t at = first; first && at < end; at += 4) {
+        uint32_t listener = R32(at);
+        uint32_t owner = R32(listener + kListenerOwner);
+        LOGR("menu trace: listener %08X vtable %08X codes %08X ports %08X held %u owner %08X owner vtable %08X",
+             listener, R32(listener), R32(listener + kListenerCodes), R32(listener + kListenerPorts),
+             R32(listener + kListenerHeld), owner, Readable(owner) ? R32(owner) : 0);
+    }
+}
+
+void TraceScreen(uint32_t screen) {
+    static uint32_t traced = UINT32_MAX;
+    if (!kTraceMenus || screen == traced) return;
+    traced = screen;
+    if (!screen) return TraceKeyboardListeners();
+    uint32_t script = R32(screen + kScreenScript);
+    uint32_t path = script ? R32(script + kScriptPath) : 0;
+    uint32_t handler = R32(screen + kScreenInputHandler);
+    const char* path_text = Readable(path) ? Text(path) : "-";
+    const char* handler_text = Readable(handler) ? Text(handler) : "-";
+    std::optional<Items> items = FindItems(screen);
+    LOGR("menu trace: screen %08X path %s rows %u columns %u count %u focus %u accept %d cancel %d handler %s items %d",
+         screen, path_text, R32(screen + kScreenRows), R32(screen + kScreenColumns), R32(screen + kScreenCount),
+         R32(screen + kScreenFocus), int(R32(screen + kScreenAccept)), int(R32(screen + kScreenCancel)), handler_text,
+         items ? int(items->clips.size()) : -1);
+    uint32_t page = Readable(path) ? Resolve(Text(path)) : 0;
+    if (page) TraceClips(page, 0);
+}
+
 void UpdateMenu(uint32_t screen) {
     uint64_t now = NowMs();
     if (screen) g_state.menu_ms = now;
@@ -611,6 +719,7 @@ void UpdateMenu(uint32_t screen) {
 void UpdateCursor(X86Context& ctx) {
     // the attache case takes the bound keys and mouse buttons as play does
     uint32_t screen = CaseShown() ? 0 : MenuScreen();
+    TraceScreen(screen);
     UpdateMenu(screen);
     UpdatePauseTabs(screen && IsPauseTabs(screen) ? screen : 0);
     input::SetPageKeys(screen ? std::optional(KeysOf(screen)) : std::nullopt);
