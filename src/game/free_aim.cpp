@@ -22,6 +22,7 @@ constexpr uint32_t kPlayerVtable = 0x6A3D00;
 constexpr uint32_t kPlayerPort = 0xB24;
 constexpr uint32_t kPlayerAimFlags = 0x5E8;
 constexpr uint32_t kAimFlagAiming = 0x001;  // shots go at the aim point
+constexpr uint32_t kAimFlagFocusLock = 0x004;  // set by PlayerTargetingSM's focus lock 0x12B9E0
 constexpr uint32_t kCurrentGun = 0x20311;    // thiscall, the gun in hand or 0
 constexpr uint32_t kPlayerAimPoint = 0x604;
 constexpr uint32_t kPlayerCarried = 0x1FBA5;  // thiscall, the object the player holds onto or 0
@@ -79,6 +80,9 @@ constexpr uint32_t kLineMask = 0x4800136;
 constexpr uint32_t kLineFlags = 0x800000;
 constexpr uint32_t kWorldLineTest = 0x2839D0;  // thiscall on the world (line, nearest hit)
 
+// a damage message: the shooter's link
+constexpr uint32_t kMessageShooter = 4;
+
 // nearest hit callback, its line, ignore list and our end point after it
 constexpr uint32_t kNearestHitVtable = 0x691430;
 constexpr uint32_t kHitBest = 0x04;
@@ -127,9 +131,25 @@ bool FreeAimGun(X86Context& ctx, uint32_t player, uint32_t gun) {
     return !(R32(gun + kGunFlags) & kGunAimsAsThrown) && IsGun(ctx, gun);
 }
 
+// the throw state check stops running while each shot puts the gun through the firing state
 bool InFreeAim(uint32_t player) {
-    if (!player || player != g_player || CutscenePlaying()) return false;
-    return R32(kFrameCount) - g_frame <= 1;
+    if (!player || CutscenePlaying()) return false;
+    uint32_t now = R32(kFrameCount);
+    bool aiming = player == g_player && now - g_frame <= 1;
+    bool firing = player == g_firing_player && now - g_firing_frame <= 1;
+    return aiming || firing;
+}
+
+// focus targets take a hit only from a shooter in focus lock: lends it to a free aim shooter, returns them or 0
+uint32_t LendFocusLock(uint32_t message) {
+    uint32_t link = R32(message + kMessageShooter);
+    if (!link || link == kLinkOffset) return 0;
+    uint32_t player = link - kLinkOffset;
+    if (!KeyboardPlayer(player) || !InFreeAim(player)) return 0;
+    uint32_t flags = R32(player + kPlayerAimFlags);
+    if (flags & kAimFlagFocusLock) return 0;
+    W32(player + kPlayerAimFlags, flags | kAimFlagFocusLock);
+    return player;
 }
 
 uint32_t CurrentGun(X86Context& ctx, uint32_t player) {
@@ -317,3 +337,30 @@ X86_FUNC(sub_00019BD3) {
     W32(player + kPlayerAimFlags, R32(player + kPlayerAimFlags) & ~added);
     WriteVec(player + kPlayerAimPoint, aim_point);
 }
+
+// focus target damage checks, thiscall(message), each run with the focus lock lent
+static void CheckAsFocusShot(X86Context& ctx, uint8_t* base, void (*check)(X86Context&, uint8_t*)) {
+    uint32_t lent = LendFocusLock(R32(ctx.esp + 4));
+    check(ctx, base);
+    if (lent) W32(lent + kPlayerAimFlags, R32(lent + kPlayerAimFlags) & ~kAimFlagFocusLock);
+}
+
+// FocusDestructible damage filter (mode 7)
+X86_EXTERN_FUNC(__imp__sub_000164A6);
+X86_FUNC(sub_000164A6) { CheckAsFocusShot(ctx, base, __imp__sub_000164A6); }
+
+// FocusGrenade
+X86_EXTERN_FUNC(__imp__sub_000111AE);
+X86_FUNC(sub_000111AE) { CheckAsFocusShot(ctx, base, __imp__sub_000111AE); }
+
+// FocusVest, the torso
+X86_EXTERN_FUNC(__imp__sub_000137F6);
+X86_FUNC(sub_000137F6) { CheckAsFocusShot(ctx, base, __imp__sub_000137F6); }
+
+// an enemy's focus hit volume
+X86_EXTERN_FUNC(__imp__sub_00013ABC);
+X86_FUNC(sub_00013ABC) { CheckAsFocusShot(ctx, base, __imp__sub_00013ABC); }
+
+// a hit near an enemy's focus point
+X86_EXTERN_FUNC(__imp__sub_000153D0);
+X86_FUNC(sub_000153D0) { CheckAsFocusShot(ctx, base, __imp__sub_000153D0); }
