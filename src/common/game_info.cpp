@@ -6,7 +6,11 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
+#include <string>
 
 #include <toml++/toml.hpp>
 
@@ -98,24 +102,99 @@ bool Message(void* hwnd, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* resu
     return false;
 }
 
-// port 0 has the keyboard; the game sees no input while the panel is open or a binding waits
+// The SDK reads and sets the controller slot numbered as the port. A player port takes the slot it is set to, so a
+// slot read or set for another port goes past these hooks.
+thread_local bool g_raw = false;
+std::array<std::atomic<uint32_t>, kPlayers> g_motors{};  // by slot: left << 16 | right as its player last set
+
+input::Pad RawPad(int slot) {
+    g_raw = true;
+    input::Pad pad = input::Poll(slot);
+    g_raw = false;
+    return pad;
+}
+
+void RawRumble(int slot, uint16_t left, uint16_t right) {
+    g_raw = true;
+    input::Rumble(slot, left, right);
+    g_raw = false;
+}
+
+input::Pad SlotPad(int port, int slot, const input::Pad& own) {
+    if (slot < 0) return input::Pad{};
+    return slot == port ? own : RawPad(slot);
+}
+
+bool SlotOwned(int slot) {
+    const auto& players = Opt().players;
+    return std::any_of(players.begin(), players.end(), [slot](const PlayerPort& p) { return p.pad == slot; });
+}
+
+// the port's controller slot and, when set to, the keyboard; the game sees no input while the panel is open or a
+// binding waits
 void Pad(int port, input::Pad& pad) {
-    input::SeenPad(port, pad);
+    if (g_raw || port < 0 || port >= kPlayers) return;
+    PlayerPort player = Opt().players[size_t(port)];
+    pad = SlotPad(port, player.pad, pad);
+    if (player.keyboard) input::SeenPad(port, pad);
     input::RemapPad(port, pad);
-    if (port == 0) pad.connected = true;
+    if (player.keyboard) pad.connected = true;
     if (app::MenuOpen() || app::Capturing()) {
         pad = input::Pad{.connected = pad.connected};
-    } else if (port == 0) {
+    } else if (player.keyboard) {
         input::Keyboard(pad);
     }
     TakeCutsceneSkip(port, pad);
 }
 
-// no vibration while the keyboard and mouse are in use
+// to the port's own slot; what the SDK then sets on the slot numbered as the port is that slot's player's.
+// No vibration while the keyboard and mouse are in use.
 void Rumble(int port, uint16_t& left, uint16_t& right) {
-    if (port != 0 || !input::KeyboardActive()) return;
-    left = 0;
-    right = 0;
+    if (g_raw || port < 0 || port >= kPlayers) return;
+    PlayerPort player = Opt().players[size_t(port)];
+    if (player.keyboard && input::KeyboardActive()) {
+        left = 0;
+        right = 0;
+    }
+    if (player.pad >= 0) g_motors[size_t(player.pad)] = uint32_t(left) << 16 | right;
+    if (player.pad >= 0 && player.pad != port) RawRumble(player.pad, left, right);
+    uint32_t motors = SlotOwned(port) ? g_motors[size_t(port)].load() : 0;
+    left = uint16_t(motors >> 16);
+    right = uint16_t(motors);
+}
+
+std::string PortName(const PlayerPort& p) {
+    std::string name = p.keyboard ? "keyboard" : "";
+    if (p.pad >= 0) name += (name.empty() ? "controller" : "+controller") + std::to_string(p.pad + 1);
+    return name.empty() ? "none" : name;
+}
+
+PlayerPort ParsePort(const std::string& name, PlayerPort fallback) {
+    PlayerPort p;
+    p.keyboard = name.find("keyboard") != std::string::npos;
+    if (size_t at = name.find("controller"); at != std::string::npos && at + 10 < name.size()) {
+        int n = name[at + 10] - '0';  // the digit after "controller"
+        if (n >= 1 && n <= kPlayers) p.pad = n - 1;
+    }
+    return p.keyboard || p.pad >= 0 || name == "none" ? p : fallback;
+}
+
+std::string PlayerKey(int player) { return "player" + std::to_string(player + 1); }
+
+// a device sits on one port only, and player 1 never has none
+void LoadPlayers(const toml::table& settings, std::array<PlayerPort, kPlayers>& players) {
+    for (int i = 0; i < kPlayers; i++) {
+        PlayerPort& p = players[size_t(i)];
+        p = ParsePort(settings[PlayerKey(i)].value_or(PortName(p)), p);
+        for (int j = 0; j < i; j++) {
+            if (players[size_t(j)].keyboard) p.keyboard = false;
+            if (p.pad >= 0 && players[size_t(j)].pad == p.pad) p.pad = -1;
+        }
+    }
+    auto used = [](const PlayerPort& p) { return p.keyboard || p.pad >= 0; };
+    auto first = std::find_if(players.begin(), players.end(), used);
+    if (first == players.end()) players[0] = PlayerPort{true, 0};
+    else std::swap(players[0], *first);
 }
 
 void LoadNames(const toml::table& settings, const char* name, std::map<std::string, std::string>& names) {
@@ -141,6 +220,7 @@ void Load(const void* table) {
     options.monitor = settings["monitor"].value_or(options.monitor);
     LoadNames(settings, "keys", options.keys);
     LoadNames(settings, "pad_buttons", options.pad_buttons);
+    LoadPlayers(settings, options.players);
 }
 
 void Save(void* table) {
@@ -150,6 +230,7 @@ void Save(void* table) {
     settings.insert("mouse_sensitivity", std::round(double(Opt().mouse_sensitivity) * 1000.0) / 1000.0);
     SaveNames(settings, "keys", Opt().keys);
     SaveNames(settings, "pad_buttons", Opt().pad_buttons);
+    for (int i = 0; i < kPlayers; i++) settings.insert(PlayerKey(i), PortName(Opt().players[size_t(i)]));
 }
 
 void Init() {
@@ -165,6 +246,8 @@ Options& Opt() {
     static Options options;
     return options;
 }
+
+bool ControllerPlugged(int slot) { return slot >= 0 && slot < kPlayers && RawPad(slot).connected; }
 
 }  // namespace game
 

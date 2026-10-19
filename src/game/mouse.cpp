@@ -53,12 +53,14 @@ input::MouseMove Take(View view) {
     return taken;
 }
 
-// the keyboard and mouse are port 0, the other players keep their controllers
-bool OnPortZero(uint32_t player) { return player != 0 && R32(player + kPlayerPort) == 0; }
+// the player driven from the keyboard's port, the other players keep their controllers
+bool OnKeyboardPort(uint32_t player) {
+    return player != 0 && int(R32(player + kPlayerPort)) == input::KeyboardPort();
+}
 
 input::MouseMove TakeForPlayer(View view, uint32_t player) {
     input::MouseMove move = Take(view);
-    return OnPortZero(player) ? move : input::MouseMove{};
+    return OnKeyboardPort(player) ? move : input::MouseMove{};
 }
 
 bool Moved(input::MouseMove move) { return move.dx != 0.0f || move.dy != 0.0f; }
@@ -160,14 +162,14 @@ void ChaseMouseTake(X86Context& ctx, uint8_t*) {
 
 // no stick input this update, so the camera may swing back behind Bond; true keeps it where the mouse left it
 bool ChaseHoldsCentring(X86Context& ctx, uint8_t*) {
-    if (!input::KeyboardActive() || !OnPortZero(R32(ctx.esi + kChasePlayer))) return false;
+    if (!input::KeyboardActive() || !OnKeyboardPort(R32(ctx.esi + kChasePlayer))) return false;
     return !game::Opt().camera_centring || Moved(g_chase);
 }
 
 // on keyboard and mouse with centring off the camera keeps its direction while Bond moves
 static bool HoldsDirection(uint32_t camera) {
     if (game::Opt().camera_centring) return false;
-    return input::KeyboardActive() && OnPortZero(R32(camera + kChasePlayer));
+    return input::KeyboardActive() && OnKeyboardPort(R32(camera + kChasePlayer));
 }
 
 // Bond moved and the view turned after him; the turn back undoes it, as the game does when focusing
@@ -190,7 +192,7 @@ void ChaseYaw(X86Context& ctx, uint8_t*) {
 
 // the jetpack picks its turn stick; on keyboard and mouse A and D strafe and the mouse turns
 void JetpackTurnStick(X86Context& ctx, uint8_t*) {
-    bool mouse = input::KeyboardActive() && OnPortZero(R32(ctx.ebx + kJetpackPlayer));
+    bool mouse = input::KeyboardActive() && OnKeyboardPort(R32(ctx.ebx + kJetpackPlayer));
     if (mouse) ctx.ecx = (ctx.ecx & ~kLowByte) | kRightStickTurns;
 }
 

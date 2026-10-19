@@ -5,13 +5,14 @@
 
 #include "core/input.h"
 
-// the keyboard and mouse as the controller on port 0
+// the keyboard and mouse as the controller of the player port they are set to
 namespace input {
 
 void StartMouse(void* hwnd);    // window thread, the game window is up
 void OnRawInput(void* handle);  // window thread, WM_INPUT
 void ReleaseCursor();           // the game lost the input: the clip goes, held keys wait for release
-void Keyboard(Pad& pad);        // held keys onto port 0's pad
+void Keyboard(Pad& pad);        // held keys onto the keyboard port's pad
+int KeyboardPort();             // the player port the keyboard and mouse are on, -1 for none
 
 // raw mouse counts since the last call, scaled by the settings; none when there is no motion
 struct MouseMove {
@@ -59,7 +60,7 @@ struct Pointer {
 };
 std::optional<Pointer> Cursor();  // none while it is not shown
 
-// a short press on port 0's pad: the cursor gives the menus their own input
+// a short press on the keyboard port's pad: the cursor gives the menus their own input
 enum class Tap { Start, Back, Up, Down, Left, Right, A, B };
 void Press(Tap tap);
 

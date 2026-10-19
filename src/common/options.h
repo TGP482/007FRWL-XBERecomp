@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <atomic>
 #include <map>
 #include <string>
@@ -8,6 +9,13 @@ namespace game {
 
 // the languages the recomp text has: English, French, German, Italian, Spanish
 inline constexpr const char* kLanguages[] = {"int", "fra", "deu", "ita", "esp"};
+
+// what a player's controller port has plugged in: the keyboard and mouse, a controller, both or neither
+struct PlayerPort {
+    bool keyboard = false;
+    int pad = -1;  // controller slot 0 to 3, -1 for none
+};
+inline constexpr int kPlayers = 4;  // the console's controller ports
 
 struct Options {
     bool skip_intros = false;
@@ -30,6 +38,7 @@ struct Options {
     bool async_shaders = true;  // a draw whose pipeline needs compiling is skipped until the build threads have it
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
     std::map<std::string, std::string> pad_buttons;  // action id to a controller button's name, absent is the default
+    std::array<PlayerPort, kPlayers> players = {{{true, 0}, {false, 1}, {false, 2}, {false, 3}}};  // by port
 };
 Options& Opt();
 const char* ShownLanguage();  // language.cpp
@@ -40,5 +49,6 @@ inline std::atomic<bool> g_focus_paused{false};  // the game thread waits for th
 void WaitWhileUnfocused();  // focus_pause.cpp: game thread, before the present
 uint32_t FocusPausedMs();  // the milliseconds the game thread has waited in focus pauses so far
 bool OnGameThread();  // the calling thread is the one that waits in focus pauses
+bool ControllerPlugged(int slot);  // game_info.cpp
 
 }  // namespace game

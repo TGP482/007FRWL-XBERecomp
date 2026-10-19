@@ -1,3 +1,4 @@
+#include "common/mouse_keyboard.h"
 #include "common/options.h"
 #include "xdk/hle.h"
 
@@ -38,7 +39,7 @@ uint32_t g_player = 0;  // in the throw state through free aim
 uint32_t g_frame = 0;
 
 bool KeyboardPlayer(uint32_t player) {
-    return player && R32(player) == kPlayerVtable && R32(player + kPlayerPort) == 0;
+    return player && R32(player) == kPlayerVtable && int(R32(player + kPlayerPort)) == input::KeyboardPort();
 }
 
 bool Answers(X86Context& ctx, uint32_t item, uint32_t name) {

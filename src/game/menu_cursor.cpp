@@ -62,7 +62,6 @@ constexpr uint32_t kCodeSelect = 1;
 constexpr uint32_t kCodeDown = 5;
 constexpr uint32_t kCodeAccept = 6;
 constexpr uint32_t kCodeCancel = 7;
-constexpr uint32_t kKeyboardPort = 0;
 
 // Flash player
 constexpr uint32_t kStageWidth = 0x7626E8;  // float: the stage is drawn across the 640x480 screen
@@ -172,15 +171,16 @@ uint64_t NowMs() {
     return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(since).count());
 }
 
-// the screen that gets port 0's input code, when one would get it
+// the screen that gets the keyboard port's input code, when one would get it
 uint32_t ReceiverOf(uint32_t code) {
     uint32_t manager = R32(kListenerManager);
-    if (!manager) return 0;
+    int keyboard = input::KeyboardPort();
+    if (!manager || keyboard < 0) return 0;
     uint32_t first = R32(manager + kManagerFirst);
     uint32_t at = R32(manager + kManagerEnd);
     for (; first && at > first; at -= 4) {
         uint32_t listener = R32(at - 4);
-        bool port = R32(listener + kListenerPorts) >> kKeyboardPort & 1;
+        bool port = R32(listener + kListenerPorts) >> keyboard & 1;
         bool takes = R32(listener + kListenerCodes) >> code & 1;
         if (!port || !takes) continue;
         if (R32(listener) != kScreenListenerVtable) return 0;

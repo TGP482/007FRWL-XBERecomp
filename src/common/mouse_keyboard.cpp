@@ -1,4 +1,4 @@
-// the keyboard and mouse as the controller on port 0
+// the keyboard and mouse as the controller of the player port they are set to
 #include "common/mouse_keyboard.h"
 
 #include <algorithm>
@@ -601,6 +601,14 @@ void Keyboard(Pad& pad) {
     if (!play) PressTap(pad);
     if (!play && g_menu) PressWheel(pad);
     SetSticks(pad, sticks);
+}
+
+int KeyboardPort() {
+    const auto& players = game::Opt().players;
+    for (int port = 0; port < game::kPlayers; port++) {
+        if (players[size_t(port)].keyboard) return port;
+    }
+    return -1;
 }
 
 // only new presses count, so a drifting stick never takes over from the keyboard and mouse
