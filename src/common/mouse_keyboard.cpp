@@ -92,7 +92,7 @@ constexpr Entry kEntries[] = {
     {{"focus", "FOCUS", "E"}, Kind::Analog, kX},
     {{"wall_cover", "WALL COVER", "Ctrl"}, Kind::Analog, kY},
     {{"crouch", "CROUCH", "C"}, Kind::Analog, kBlack},
-    {{"item_select", "ITEM SELECT", "Q"}, Kind::Analog, kWhite},
+    {{"inventory", "INVENTORY", "Q"}, Kind::Game, kWhite},
     {{"lock_on", "LOCK ON", "RMB"}, Kind::Analog, kLeftTrigger},
     {{"fire", "FIRE", "LMB"}, Kind::Analog, kRightTrigger},
     {{"zoom_in", "SCOPE ZOOM IN", "Z,Wheel Up"}, Kind::Button, kDpadUp},
@@ -106,6 +106,10 @@ constexpr Entry kEntries[] = {
     {{"look_down", "LOOK DOWN", "Down"}, Kind::Look, kLookDown},
     {{"look_left", "LOOK LEFT", "Left"}, Kind::Look, kLookLeft},
     {{"look_right", "LOOK RIGHT", "Right"}, Kind::Look, kLookRight},
+    {{"inventory_up", "INVENTORY UP", "Wheel Up,W"}, Kind::Game, -1, Section::Inventory},
+    {{"inventory_down", "INVENTORY DOWN", "Wheel Down,S"}, Kind::Game, -1, Section::Inventory},
+    {{"inventory_select", "SELECT ITEM", "LMB,Q"}, Kind::Game, kA, Section::Inventory},
+    {{"inventory_cancel", "CANCEL", "RMB"}, Kind::Game, kB, Section::Inventory},
     {{"car_accelerate", "ACCELERATE", "W"}, Kind::Game, kA, Section::Car},
     {{"car_brake", "BRAKE / REVERSE", "S"}, Kind::Game, kX, Section::Car},
     {{"car_steer_left", "STEER LEFT", "A"}, Kind::Move, kLeft, Section::Car},
@@ -374,6 +378,8 @@ bool AnyDown(const std::vector<int>& keys) { return std::any_of(keys.begin(), ke
 
 const char* SectionHeading(Section section) {
     switch (section) {
+        case Section::Inventory:
+            return "INVENTORY";
         case Section::Car:
             return "CAR";
         case Section::Jetpack:

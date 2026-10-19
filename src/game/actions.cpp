@@ -34,6 +34,12 @@ constexpr Answer kAnswers[] = {
     {0xC4CCF1F7, Section::Foot, {"interact"}},          // use_object
     {0xA2D67105, Section::Foot, {"interact"}},          // enter_vehicle
     {0x83EEAB39, Section::Foot, {"reload"}},            // reload
+    {0xCBC9B2A3, Section::Foot, {"inventory"}},         // itemselect_activate
+    // item_select_hud
+    {0x9D72D5CB, Section::Inventory, {"inventory_up"}},      // itemselect_up
+    {0x3453D1D2, Section::Inventory, {"inventory_down"}},    // itemselect_down
+    {0x2E6B9A8C, Section::Inventory, {"inventory_select"}},  // itemselect_select
+    {0x18078D8A, Section::Inventory, {"inventory_cancel"}},  // itemselect_cancel
     // AstonMartinPlayerDriver; the steering is the left stick's
     {0x72D75DDD, Section::Car, {"car_accelerate"}},    // accelerate
     {0xE8B44E0B, Section::Car, {"car_brake"}},         // brake

@@ -26,6 +26,7 @@ struct Options {
     bool camera_centring = false;  // the chase camera swings back behind Bond on keyboard and mouse
     bool free_aim = false;  // holding aim with any gun gives the rocket launcher's over the shoulder aim
     bool persistent_bodies = false;  // dead enemies and their dropped guns and shields are never deleted
+    bool inventory_pause = true;  // the game pauses while the inventory is open, as on the console
     uint32_t ambient_occlusion = 0;  // screen space, from the scene's depth: 0 off, 1 SSAO, 2 GTAO
     uint32_t audio_output = 0;  // audio::kOutputAuto, kOutputStereo, kOutputSurround or kOutputMono
     float mouse_sensitivity = 1.0f;
