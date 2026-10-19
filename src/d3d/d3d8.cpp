@@ -15,6 +15,7 @@
 #include "d3d/gpu_frame.h"
 #include "d3d/occlusion.h"
 #include "d3d/pipeline_cache.h"
+#include "d3d/viewport_constants.h"
 #include "gpu/backend.h"
 #include "gpu/shaders.h"
 #include "gpu/texture.h"
@@ -187,10 +188,8 @@ bool g_own_constants = false;  // D3DSCM_NORESERVEDCONSTANTS: c-38 and c-37 are 
 void UpdateViewportConstants() {
     auto& v = g_state.viewport;
     g_state.zscale = ZScale(g_state.zs);
-    float hw = v.w * 0.5f, hh = v.h * 0.5f;
     if (!g_own_constants) {
-        g_state.vsc[58] = {hw, -hh, (v.max_z - v.min_z) * g_state.zscale, 0};
-        g_state.vsc[59] = {v.x + g_state.ss_offset_x + hw, v.y + g_state.ss_offset_y + hh, v.min_z * g_state.zscale, 0};
+        gpu::ViewportConstants(g_state, g_state.vsc[gpu::kViewportScaleSlot], g_state.vsc[gpu::kViewportOffsetSlot]);
     }
     // the viewport as the library's SetViewport stores it, for inlined readers
     if (XDK_CDevice_Viewport != xdk::kUnknown) {

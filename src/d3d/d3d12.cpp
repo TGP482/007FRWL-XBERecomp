@@ -40,6 +40,7 @@
 #include "d3d/pipeline_cache.h"
 #include "d3d/smaa_shader.h"
 #include "d3d/smaa_textures.h"
+#include "d3d/viewport_constants.h"
 #include "gpu/backend.h"
 #include "gpu/ext.h"
 #include "gpu/shaders.h"
@@ -2620,8 +2621,8 @@ uint64_t VertexKey(const State& s, const Assembled& a, const DrawShaders& sh) {
     return vkey;
 }
 
-// world units of view depth an overlay pass is pulled toward the camera by (1/256): fixed function and vertex program
-// positions round apart by up to 3e-4 of them near the camera, past what the 16 unit depth bias covers there
+// world units of view depth an overlay pass is pulled toward the camera by (1/256): positions from different
+// transforms round apart by up to 3e-4 of them near the camera, past what the 16 unit depth bias covers there
 constexpr const char* kOverlayPull = "0.00390625";
 
 // moves z by (1 - z) * pull / w, a pull along view depth: it grows near the camera as the rounding gap does,
@@ -2634,13 +2635,73 @@ std::string OverlayHlsl(std::string s) {
         s.insert(p, "    if (" + v + ".w > 0) " + v + ".z -= " + pulled + ";\n");
     };
     pull("    o.pos = q;\n", "q");
-    pull("    o.pos = cp;\n", "cp");
+    return s;
+}
+
+// fixed function clip position: the world times the view projection row by row, as a program's dp4 chain runs
+constexpr const char* kFixedClip = "    float4 cp = mul(ip, wvp);\n";
+constexpr const char* kProgramClip = R"(    precise float4 cp = mac_mul(ip.xxxx, wvp[0]);
+    cp = mac_mul(ip.yyyy, wvp[1]) + cp;
+    cp = mac_mul(ip.zzzz, wvp[2]) + cp;
+    cp = mac_mul(ip.wwww, wvp[3]) + cp;
+)";
+
+// to the screen through c-38 and c-37 as the library's program epilogue does, then the vertex program epilogue
+constexpr const char* kFixedScreen = R"(    // like the pretransformed ones, target sized passes end half a console pixel short of the far edges
+    float2 sp = (float2(cp.x, -cp.y) / cp.w + 1) * 0.5 * surf.xy;
+    if (surf.w == 0 && abs(sp.x - (surf.x - 0.5)) < 1e-3) cp.x = cp.w;
+    if (surf.w == 0 && abs(sp.y - (surf.y - 0.5)) < 1e-3) cp.y = -cp.w;
+    o.pos = cp;
+)";
+constexpr const char* kProgramScreen = R"(    precise float4 rw = ilu_rcc(cp.w);
+    oPos.xyz = mac_mul(cp.xyzz, c[58].xyzz).xyz;
+    oPos.xyz = (mac_mul(oPos.xyzz, rw.xxxx) + c[59].xyzz).xyz;
+    oPos.w = cp.w;
+    precise float4 p = oPos;
+    p.w = magclamp(p.w);
+    precise float4 q;
+    if (surf.w == 0 && abs(p.x - (surf.x - 0.5)) < 1e-3) p.x = surf.x;
+    if (surf.w == 0 && abs(p.y - (surf.y - 0.5)) < 1e-3) p.y = surf.y;
+    q.x = p.x * 2 / surf.x - 1;
+    q.y = 1 - p.y * 2 / surf.y;
+    q.z = p.z * surf.z;
+    q.xyz *= p.w;
+    q.w = p.w;
+    o.pos = q;
+)";
+
+// fog took the depth after the viewport's z range
+constexpr const char* kFixedFog = "    o.fogamt = fogfactor(abs(cp.z));\n";
+constexpr const char* kProgramFog = "    o.fogamt = fogfactor(abs((cp.z * c[58].z + cp.w * c[59].z) * surf.z));\n";
+
+// The shadow projection programs redraw the fixed function world with LESSEQUAL and no depth write. Their view
+// projection (c4 to c7) is the game's view times its projection, summed in the order MatMul sums, and the world is
+// identity, so a fixed function position computed as a program computes it lands on the same depth bit for bit
+std::string ProgramPositionHlsl(std::string s) {
+    bool applied = true;
+    auto swap = [&](const char* from, const char* to) {
+        size_t p = s.find(from);
+        if (p == std::string::npos) {
+            applied = false;
+            return;
+        }
+        s.replace(p, std::strlen(from), to);
+    };
+    swap(kFixedClip, kProgramClip);
+    swap(kFixedScreen, kProgramScreen);
+    swap(kFixedFog, kProgramFog);
+    static bool reported = false;
+    if (!applied && !reported) {
+        reported = true;
+        LOGE("d3d12: the fixed function position no longer matches ProgramPositionHlsl");
+    }
     return s;
 }
 
 std::string VertexHlsl(const State& s, const Assembled& a, const DrawShaders& sh) {
     std::string src = sh.prog ? VertexProgramHlsl(s.vs->program, a.regs, a.decode)
                               : FixedVertexHlsl(a.regs, a.pretransformed, a.decode, sh.fk);
+    if (sh.fixed_transform) src = ProgramPositionHlsl(std::move(src));
     if (sh.quad) return QuadHlsl(std::move(src));
     if (sh.overlay) return OverlayHlsl(std::move(src));
     return src;
@@ -2747,9 +2808,9 @@ constexpr float kOverlaySlope = -0.25f;
 
 // A vertex program pass laid over geometry drawn before (the shadow projection redraws the fixed function world
 // with LESSEQUAL and no depth write). The console runs both through one transform unit with the same matrix, so
-// the depths match bit for bit; here the two paths round differently and the pass loses rows of pixels to the
-// depth test, which flickers as the camera moves. The pass gets a small bias toward the camera instead, and
-// OverlayHlsl's pull near the camera. A fixed function pass over vertex program geometry is biased the same way.
+// the depths match bit for bit, as ProgramPositionHlsl makes them here for the identity world. Passes over geometry
+// placed another way still round apart and lose rows of pixels to the depth test, which flickers as the camera
+// moves, so they keep a small bias toward the camera and OverlayHlsl's pull near it.
 void D3D12Backend::ApplyOverlayBias(const DrawShaders& sh, PsoKey& k) const {
     if (!sh.overlay || k.zbias || k.zslope) return;
     k.zbias = kOverlayBias;
@@ -2886,6 +2947,7 @@ void D3D12Backend::FillTextureConstants(const State& s, const DrawTextures& stag
     }
 }
 
+// sums left to right as the game's own multiply 0x3FE670 does, see ProgramPositionHlsl
 void MatMul(const float* x, const float* y, float* o) {
     for (int r = 0; r < 4; r++) {
         for (int col = 0; col < 4; col++) {
@@ -2923,23 +2985,13 @@ constexpr size_t kTsProjection = 3;
 constexpr size_t kTsTexture0 = 16;
 constexpr size_t kTsWorld = 256;
 
-void FillTransformConstants(const State& s, GuestExtent size, DrawConstants& c) {
-    uint32_t gw = size.w;
-    uint32_t gh = size.h;
-    // world, view, projection, then the viewport inside the target
+// world, view, projection; ProgramPositionHlsl takes it to the viewport
+void FillTransformConstants(const State& s, DrawConstants& c) {
     float wv[16];
     float wvp[16];
     MatMul(s.transforms[kTsWorld].data(), s.transforms[kTsView].data(), wv);
     MatMul(wv, s.transforms[kTsProjection].data(), wvp);
-    const auto& v = s.viewport;
-    float sx = float(v.w) / gw;
-    float sy = float(v.h) / gh;
-    float ox = (2.0f * v.x + v.w) / gw - 1;
-    float oy = 1 - (2.0f * v.y + v.h) / gh;
-    float vpm[16] = {sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, v.max_z - v.min_z, 0, ox, oy, v.min_z, 1};
-    float full[16];
-    MatMul(wvp, vpm, full);
-    Transpose(full, c.wvp);
+    Transpose(wvp, c.wvp);
     Transpose(wv, c.wv);
     // normals take the inverse transpose of the upper 3x3
     float n[16] = {};
@@ -3013,8 +3065,11 @@ void D3D12Backend::UploadConstants(const State& s, const DrawShaders& sh, const 
     if (stages.info[0].flags & kTexAtlasClamp) std::memcpy(c.ext, stages.atlas, sizeof(c.ext));
     FillTextureConstants(s, stages, c);
     if (sh.fixed_transform) {
-        FillTransformConstants(s, size, c);
+        FillTransformConstants(s, c);
         FillLightConstants(s, sh.fk, c);
+        // fixed function reads no title constants, so c-38 and c-37 are the viewport's even while the title owns them
+        auto* vsc = reinterpret_cast<std::array<float, 4>*>(vc.cpu);
+        ViewportConstants(s, vsc[kViewportScaleSlot], vsc[kViewportOffsetSlot]);
     }
     std::memcpy(dc.cpu, &c, sizeof(c));
     cl_->SetGraphicsRootConstantBufferView(0, vc.gpu);
