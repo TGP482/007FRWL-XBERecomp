@@ -4,6 +4,7 @@
 // and a button the font draws as a picture ("Press[RDDown]to continue") is named by its key. The console's wording
 // reads in PC terms: the Xbox's names always, START and the controller with the keyboard or mouse used last.
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <cmath>
@@ -17,6 +18,8 @@
 #include "common/mouse_keyboard.h"
 #include "game/flash.h"
 #include "xdk/hle.h"
+
+bool MenuItemsShown();  // menu_cursor.cpp
 
 using namespace kernel;
 using namespace flash;
@@ -363,6 +366,229 @@ void LayOutLegends(X86Context& ctx) {
     }
 }
 
+// unnamed clips have no name string
+std::string NameOf(uint32_t clip) {
+    uint32_t name = R32(clip + kClipName);
+    return Readable(name) ? std::string(Name(clip)) : std::string("-");
+}
+
+// the text's width on one line, as the line draw measures it
+float LineWidth(X86Context& ctx, uint32_t text, float scale) {
+    static const uint32_t out = mem::AllocSystem(2 * sizeof(float));
+    uint32_t no_wrap = std::bit_cast<uint32_t>(kNoWrap);
+    g_measuring = true;
+    CallGuest(ctx, kMeasureText, {no_wrap, no_wrap, std::bit_cast<uint32_t>(scale), text, out, out + 4});
+    g_measuring = false;
+    return G<float>(out);
+}
+
+// attache case: its buttons are pictures, "subButton" clips placing a frame (2) and the button's picture. On keyboard
+// and mouse the picture goes and the key is written in its place
+
+constexpr const char* kCaseButton = "subButton";
+constexpr const char* kCaseTv = "attachedClip_mc";
+constexpr const char* kCaseRoll = "display";
+constexpr uint32_t kTypeShape = 0x0C;
+constexpr uint32_t kCasePicturePlace = 1;  // in the clip's first places
+
+struct CasePicture {
+    uint32_t character;
+    int button;
+};
+constexpr CasePicture kCasePictures[] = {
+    {29, kA}, {23, kB}, {13, kX}, {4, kY}, {26, kLeftTrigger}, {18, kRightTrigger},
+};
+
+// the text manager, thiscall
+constexpr uint32_t kTextManager = 0x77F70C;
+constexpr uint32_t kSetColour = 0x355E10;  // palette index
+constexpr uint32_t kDrawText = 0x357920;   // page position {x, y}, scale, text, alignment
+constexpr uint32_t kSetFont = 0x355D70;    // font id, false and no font when it is not loaded
+constexpr uint32_t kFontId = 0x3A7E60;     // cdecl (name), the hash fonts are registered under
+constexpr uint32_t kDinLarge = 0x6D2F98;   // "din_large", the menus' heavy font
+constexpr uint32_t kManagerFont = 0x1C;
+constexpr uint32_t kManagerGlyphScale = 0x4C;
+constexpr uint32_t kManagerPageWidth = 0x60;
+constexpr uint32_t kManagerPageHeight = 0x64;
+constexpr uint32_t kFontHeight = 0x18;  // int
+constexpr uint32_t kTextBlack = 0;  // palette indices
+constexpr uint32_t kTextWhite = 12;
+constexpr uint32_t kAlignCentre = 1;
+constexpr float kKeyHeight = 0.5f;  // of the picture's height
+constexpr float kKeyWidth = 0.9f;   // of the picture's width, at most
+constexpr float kShadow = 1.0f / 480.0f;  // of the page height
+
+// RenderWare's record of the texture on stage 0, which the game's own SetTexture calls leave behind
+constexpr uint32_t kAppliedTexture = 0x810D8C;
+constexpr uint32_t kNoTexture = 0xFFFFFFFF;
+
+constexpr uint32_t kStageWidth = 0x7626E8;  // float
+constexpr uint32_t kStageHeight = 0x7626EC;
+constexpr int kMaxParents = 32;
+
+struct Point {
+    float x;
+    float y;
+};
+
+struct CaseKey {
+    Point middle;  // share of the stage
+    float width;   // share of the stage
+    float height;  // share of the stage
+    std::string key;
+};
+
+// a shape's matrix, kept while the shape is drawn at no size: shapes draw whether shown or not
+struct Collapsed {
+    uint32_t shape;
+    std::array<float, 4> axes;
+};
+
+struct CaseState {
+    std::vector<uint32_t> hidden;
+    std::vector<Collapsed> collapsed;
+    std::vector<CaseKey> keys;
+};
+CaseState g_case;
+
+std::optional<int> CaseButtonOf(uint32_t clip) {
+    uint32_t character = Character(clip);
+    if (!character || NameOf(clip) != kCaseButton) return std::nullopt;
+    std::vector<uint32_t> places = FirstPlaces(character);
+    if (places.size() <= kCasePicturePlace) return std::nullopt;
+    for (const CasePicture& picture : kCasePictures) {
+        if (picture.character == places[kCasePicturePlace]) return picture.button;
+    }
+    return std::nullopt;
+}
+
+Point Transform(uint32_t clip, Point point) {
+    const float* m = &G<float>(clip + kClipMatrix);
+    return {m[0] * point.x + m[2] * point.y + m[4], m[1] * point.x + m[3] * point.y + m[5]};
+}
+
+// the clip's middle and height as shares of the stage; none when a parent is hidden
+std::optional<CaseKey> CaseKeyOf(X86Context& ctx, uint32_t clip) {
+    static const uint32_t out = mem::AllocSystem(4 * sizeof(float));
+    uint32_t ecx = ctx.ecx;
+    ctx.ecx = clip;
+    CallGuest(ctx, kClipBox, {out});
+    ctx.ecx = ecx;
+    Point low = {G<float>(out), G<float>(out + 4)};
+    Point high = {G<float>(out + 8), G<float>(out + 12)};
+    uint32_t parent = R32(clip + kClipParent);
+    for (int i = 0; parent && i < kMaxParents; i++, parent = R32(parent + kClipParent)) {
+        if (!Shown(parent)) return std::nullopt;
+        low = Transform(parent, low);
+        high = Transform(parent, high);
+    }
+    float width = G<float>(kStageWidth);
+    float height = G<float>(kStageHeight);
+    if (!(width > 0) || !(height > 0) || high.y <= low.y) return std::nullopt;
+    Point middle = {(low.x + high.x) / 2 / width, (low.y + high.y) / 2 / height};
+    return CaseKey{middle, (high.x - low.x) / width, (high.y - low.y) / height, {}};
+}
+
+void ShowCasePictures() {
+    for (uint32_t clip : g_case.hidden) SetShown(clip, true);
+    for (const Collapsed& picture : g_case.collapsed) {
+        std::copy(picture.axes.begin(), picture.axes.end(), &G<float>(picture.shape + kClipMatrix));
+    }
+    g_case.hidden.clear();
+    g_case.collapsed.clear();
+}
+
+void CollapseForRender(uint32_t shape) {
+    float* axes = &G<float>(shape + kClipMatrix);
+    Collapsed picture{shape, {}};
+    std::copy(axes, axes + picture.axes.size(), picture.axes.begin());
+    std::fill(axes, axes + picture.axes.size(), 0.0f);
+    g_case.collapsed.push_back(picture);
+}
+
+
+// the button's picture, the shape it places beside its frame; an entered button's picture is removed
+uint32_t CasePictureOf(uint32_t clip) {
+    for (uint32_t child : Children(clip)) {
+        if (Type(child) == kTypeShape) return child;
+    }
+    return 0;
+}
+
+// the TV rolls from one picture to the next through a strip of its own
+bool IsCaseRoll(uint32_t clip) {
+    uint32_t parent = R32(clip + kClipParent);
+    return NameOf(clip) == kCaseRoll && Readable(parent) && NameOf(parent) == kCaseTv;
+}
+
+void HideForRender(uint32_t clip) {
+    SetShown(clip, false);
+    g_case.hidden.push_back(clip);
+}
+
+void VisitCase(X86Context& ctx, uint32_t clip, int depth) {
+    if (IsCaseRoll(clip)) {
+        if (Shown(clip)) HideForRender(clip);
+        return;
+    }
+    if (std::optional<int> button = CaseButtonOf(clip)) {
+        uint32_t picture = CasePictureOf(clip);
+        if (!picture || !Shown(clip)) return;
+        std::string key = input::ButtonKey(*button);
+        std::optional<CaseKey> place = key.empty() ? std::nullopt : CaseKeyOf(ctx, clip);
+        if (!place) return;
+        place->key = key;
+        g_case.keys.push_back(*place);
+        CollapseForRender(picture);
+        return;
+    }
+    if (depth >= kMaxTreeDepth) return;
+    for (uint32_t child : Children(clip)) VisitCase(ctx, child, depth + 1);
+}
+
+// the pictures are hidden for the render alone, so the game's own showing and hiding of them is untouched
+void UpdateCaseKeys(X86Context& ctx) {
+    g_case.keys.clear();
+    g_case.hidden.clear();
+    g_case.collapsed.clear();
+    // a page of items over the case, its pause page, takes the menus' own prompts
+    if (!input::KeyboardActive() || MenuItemsShown()) return;
+    for (uint32_t level : Levels()) VisitCase(ctx, level, 0);
+}
+
+void DrawCaseKey(X86Context& ctx, uint32_t manager, const CaseKey& key) {
+    static const uint32_t position = mem::AllocSystem(8 + kMaxText);
+    uint32_t text = position + 8;
+    std::copy(key.key.begin(), key.key.end(), &G<char>(text));
+    G<char>(text + uint32_t(key.key.size())) = 0;
+    float page_width = G<float>(manager + kManagerPageWidth);
+    float page_height = G<float>(manager + kManagerPageHeight);
+    uint32_t font = R32(manager + kManagerFont);
+    float unit = float(int32_t(R32(font + kFontHeight))) * G<float>(manager + kManagerGlyphScale);
+    if (!(unit > 0)) return;
+    float scale = key.height * page_height * kKeyHeight / unit;
+    ctx.ecx = manager;
+    float drawn = LineWidth(ctx, text, scale);
+    float room = key.width * page_width * kKeyWidth;
+    if (drawn > room) scale *= room / drawn;
+    float x = key.middle.x * page_width;
+    float y = page_height * (1 - key.middle.y) - scale * unit / 2;  // the page counts y up, the text sits on y
+    struct Pass {
+        uint32_t colour;
+        float dx;
+        float dy;
+    };
+    float shadow = kShadow * page_height;
+    for (Pass pass : {Pass{kTextBlack, shadow, -shadow}, Pass{kTextWhite, 0, 0}}) {
+        G<float>(position) = x + pass.dx;
+        G<float>(position + 4) = y + pass.dy;
+        ctx.ecx = manager;
+        CallGuest(ctx, kSetColour, {pass.colour});
+        ctx.ecx = manager;
+        CallGuest(ctx, kDrawText, {position, std::bit_cast<uint32_t>(scale), text, kAlignCentre});
+    }
+}
+
 void Visit(X86Context& ctx, uint32_t clip, int depth, bool keyboard) {
     if (++g_legends.visits > kMaxVisits) return;
     if (const Legend* legend = LegendOf(clip)) return ApplyLegend(ctx, clip, *legend, keyboard);
@@ -485,16 +711,6 @@ bool IsLegendText(const std::string& text) {
                        [&](const LegendText& legend) { return legend.text == text; });
 }
 
-// the text's width on one line, as the line draw measures it
-float LineWidth(X86Context& ctx, uint32_t text, float scale) {
-    static const uint32_t out = mem::AllocSystem(2 * sizeof(float));
-    uint32_t no_wrap = std::bit_cast<uint32_t>(kNoWrap);
-    g_measuring = true;
-    CallGuest(ctx, kMeasureText, {no_wrap, no_wrap, std::bit_cast<uint32_t>(scale), text, out, out + 4});
-    g_measuring = false;
-    return G<float>(out);
-}
-
 // A relabelled text is laid out in a box sized for the console's button picture: the box grows to keep it on one
 // line, about the side it is aligned to. Restored by the caller after the draw
 void FitRect(uint32_t rect, float width, uint32_t align) {
@@ -507,6 +723,32 @@ void FitRect(uint32_t rect, float width, uint32_t align) {
 }
 
 }  // namespace
+
+bool CaseShown() { return !g_case.keys.empty(); }
+
+// before the Flash render, 0x412F1F
+void HideCasePictures(X86Context& ctx, uint8_t*) {
+    X86Context saved = ctx;
+    UpdateCaseKeys(ctx);
+    ctx = saved;
+}
+
+// the Flash menus are drawn, 0x412F24, still in their 2D pass: the pictures back and the case's keys over them
+void DrawCaseKeys(X86Context& ctx, uint8_t*) {
+    X86Context saved = ctx;
+    ShowCasePictures();
+    uint32_t manager = R32(kTextManager);
+    if (!g_case.keys.empty() && manager && R32(manager + kManagerFont)) {
+        uint32_t previous_font = R32(manager + kManagerFont);
+        uint32_t id = CallGuest(ctx, kFontId, {kDinLarge});
+        ctx.ecx = manager;
+        if (!(CallGuest(ctx, kSetFont, {id}) & 0xFF)) W32(manager + kManagerFont, previous_font);
+        W32(kAppliedTexture, kNoTexture);
+        for (const CaseKey& key : g_case.keys) DrawCaseKey(ctx, manager, key);
+        W32(manager + kManagerFont, previous_font);
+    }
+    ctx = saved;
+}
 
 // frame tick, after the pads are read
 void MenuPrompts(X86Context& ctx, uint8_t*) {

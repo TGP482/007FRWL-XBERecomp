@@ -15,6 +15,8 @@ code_sections = [".text", "D3D", "XGRPH", "DSOUND", "D3DX", "XPP", ".idata"]
 0x4F1920 = ""  # stored at 0x84C794 by 0x274178
 0x4FB0B4 = ""  # thread notify callback stored at 0x846E6C by 0x4F51A8
 0x200A0 = ""   # jump thunk, direct call from 0x89721 left undecoded
+0x309875 = ""  # Apt child draw, stored at [ebp+0x6C] by 0x309AFB
+0x3098D6 = ""  # its other one
 
 # functions the host replaces or calls by name, 0 where the image has none
 [symbols]
@@ -382,6 +384,15 @@ call = "HudWidgetEnd"
 [[hook]]
 at = 0x412F1F
 call = "MenuDrawBegin"
+
+[[hook]]
+at = 0x412F1F
+call = "HideCasePictures"
+
+# Flash menus drawn, still in their 2D pass: the attache case's keys in place of its button pictures
+[[hook]]
+at = 0x412F24
+call = "DrawCaseKeys"
 
 [[hook]]
 at = 0x412F24

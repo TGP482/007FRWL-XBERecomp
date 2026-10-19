@@ -20,7 +20,10 @@
 #include "common/mouse_keyboard.h"
 #include "game/flash.h"
 #include "game/options_menu.h"
+#include "game/pause_tabs.h"
 #include "xdk/hle.h"
+
+bool CaseShown();  // prompts.cpp: the attache case shows its keys
 
 using namespace kernel;
 using namespace flash;
@@ -361,6 +364,15 @@ std::optional<Items> FindItems(uint32_t screen) {
     return std::nullopt;
 }
 
+// the pause menu's tab screen, not its options screen on the same page
+bool IsPauseTabs(uint32_t screen) {
+    uint32_t script = R32(screen + kScreenScript);
+    uint32_t path = script ? R32(script + kScriptPath) : 0;
+    if (!Readable(path) || OptionsMenuStockRows(screen)) return false;
+    uint32_t page = Resolve(Text(path));
+    return page && PauseTabs(Children(page), R32(screen + kScreenCount));
+}
+
 // which way the names count, from the one item the page shows focused
 Order OrderOf(const std::vector<uint32_t>& clips, uint32_t focus) {
     int shown = -1;
@@ -500,7 +512,19 @@ std::optional<uint32_t> ItemAt(X86Context& ctx, const std::vector<uint32_t>& cli
     return hit;
 }
 
-// a row added past the clips is spaced as the options menu draws it, on from the first two items
+// the recomp's tabs below the last stock one, spaced as the stock ones: their index past the clips
+std::optional<uint32_t> ExtraTabAt(X86Context& ctx, const std::vector<uint32_t>& clips, Point stage, Extent usual) {
+    std::optional<Box> first = StageBox(ctx, clips.front());
+    std::optional<Box> last = StageBox(ctx, clips.back());
+    if (!first || !last) return std::nullopt;
+    float step = (last->top + last->bottom - first->top - first->bottom) / 2 / float(clips.size() - 1);
+    for (uint32_t tab = 1; tab <= kExtraTabs; tab++) {
+        Point at{stage.x, stage.y - step * float(tab)};
+        if (Nearness(ctx, clips.back(), at, usual)) return uint32_t(clips.size()) - 1 + tab;
+    }
+    return std::nullopt;
+}
+
 // the cursor on the stage; on a wide frame hud.cpp keeps the menus 4:3 in the middle
 Point StagePoint(const input::Pointer& cursor) {
     float x = cursor.x;
@@ -541,17 +565,24 @@ void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
     Order order = LatchOrder(screen, *items);
     Extent usual = UsualExtent(ctx, items->clips);
     std::optional<uint32_t> hit = ItemAt(ctx, items->clips, stage, usual);
+    bool tabs = IsPauseTabs(screen);
+    if (!hit && tabs) hit = ExtraTabAt(ctx, items->clips, stage, usual);
     if (!hit) return;
     uint32_t last = uint32_t(items->clips.size()) - 1;
+    bool extra = *hit > last;
     bool options = OptionsMenuStockRows(screen) > 0;
     uint32_t focus = R32(screen + kScreenFocus);
     uint32_t focused = order == Order::Reverse ? last - focus : focus;
-    if (!options && focused <= last && focused != *hit) {
+    if (!options && !extra && focused <= last && focused != *hit) {
         std::optional<float> keep = Nearness(ctx, items->clips[focused], stage, usual);
         std::optional<float> near = Nearness(ctx, items->clips[*hit], stage, usual);
         if (keep && *keep < *near + kStickiness) hit = focused;
     }
+    // a recomp tab keeps the stock screen on its last tab
+    int tab = int(*hit);
+    if (extra) hit = last;
     uint32_t slot = order == Order::Reverse ? last - *hit : *hit;
+    if (tabs) PointPauseTab(extra ? tab : int(slot));
     uint32_t index = options ? uint32_t(OptionsMenuIndexAt(int(slot))) : slot;
     Pending& pending = g_state.pending;
     bool clicked = pending.accept && pending.screen == screen && pending.index == index;
@@ -577,8 +608,10 @@ void UpdateMenu(uint32_t screen) {
 }
 
 void UpdateCursor(X86Context& ctx) {
-    uint32_t screen = MenuScreen();
+    // the attache case takes the bound keys and mouse buttons as play does
+    uint32_t screen = CaseShown() ? 0 : MenuScreen();
     UpdateMenu(screen);
+    UpdatePauseTabs(screen && IsPauseTabs(screen) ? screen : 0);
     input::SetPageKeys(screen ? std::optional(KeysOf(screen)) : std::nullopt);
     std::optional<input::Pointer> cursor = screen ? input::Cursor() : std::nullopt;
     if (!cursor) return;
@@ -591,6 +624,12 @@ void UpdateCursor(X86Context& ctx) {
 
 }  // namespace
 
+// a menu page with a grid of items takes the input; a page whose script takes the codes itself has none
+bool MenuItemsShown() {
+    uint32_t screen = MenuScreen();
+    return screen && R32(screen + kScreenCount) && !HasInputHandler(screen);
+}
+
 // frame tick, after the pads are read and before the game updates
 void MenuCursor(X86Context& ctx, uint8_t*) {
     X86Context saved = ctx;
@@ -602,5 +641,6 @@ void MenuCursor(X86Context& ctx, uint8_t*) {
 void MenuCursorFocus(X86Context& ctx, uint8_t*) {
     X86Context saved = ctx;
     ApplyPending(ctx);
+    OptionsMenuFocus(ctx);
     ctx = saved;
 }

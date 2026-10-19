@@ -13,11 +13,12 @@
 #include "common/mouse_keyboard.h"
 #include "common/translations.h"
 #include "game/options_menu.h"
+#include "game/pause_tabs.h"
 #include "core/log.h"
 #include "xdk/hle.h"
 
-// Recomp settings in the game's own options menu, the front end's and the pause menu's. Entries under the stock rows
-// open pages with the F10 panel's rows. Each row is drawn as a copy of a stock row's text, and the stock menu screen
+// Recomp settings in the game's own options menu, the front end's and the pause menu's. Entries under the front end's
+// stock rows open pages with the F10 panel's rows, the pause menu's tabs open them straight away. Each row is drawn as a copy of a stock row's text, and the stock menu screen
 // keeps the cursor, so the rows look and sound as the game's own.
 
 using namespace kernel;
@@ -99,6 +100,7 @@ const Menu kMenus[] = {
     {"front end", kFrontEndRows, int(std::size(kFrontEndRows))},
     {"pause", kPauseRows, int(std::size(kPauseRows))},
 };
+constexpr int kPause = 1;
 constexpr int kMaxRows = 8;
 constexpr size_t kMaxRaw = 64;
 
@@ -169,6 +171,7 @@ struct State {
     int list_top = 0;  // the list row in the first slot, past 0 once the cursor goes below the stock rows
     Repeat repeat;
     int missing = 0;  // frames the menu was not drawn
+    bool direct = false;  // the page opened from a pause tab, its back leaves the menu
 };
 
 // all on the game thread
@@ -178,6 +181,7 @@ State g_state;
 std::array<std::array<int, kPartCount>, kMaxRows> g_order{};
 Look g_looks[kPartCount][2][kMaxFields];
 bool g_copying = false;
+int g_tab_page = -1;  // the page a pause tab asked for, opened once its menu shows
 
 bool PageOpen() { return g_state.page >= 0; }
 
@@ -255,7 +259,10 @@ std::string RowValue(int index) {
 
 // The screen.
 
-int WantedRows() { return PageOpen() ? PageSlots() : g_layout.stock + kEntryCount; }
+// the pause menu's pages are its tabs
+int EntryCount() { return g_layout.menu == kPause ? 0 : kEntryCount; }
+
+int WantedRows() { return PageOpen() ? PageSlots() : g_layout.stock + EntryCount(); }
 
 void SetRows(int rows) {
     W32(g_state.screen + kScreenRows, uint32_t(rows));
@@ -280,7 +287,7 @@ void OpenPage(X86Context& ctx, int page) {
 void ClosePage(X86Context& ctx) {
     int entry = g_state.page;
     g_state.page = -1;
-    SetRows(g_layout.stock + kEntryCount);
+    SetRows(g_layout.stock + EntryCount());
     MoveCursor(ctx, g_layout.stock + entry);
 }
 
@@ -340,6 +347,7 @@ bool TakeDirection(X86Context& ctx, uint32_t code) {
 
 // a button on a page: the page keeps every button the screen would act on
 bool TakePageButton(X86Context& ctx, uint32_t code) {
+    if (code == R32(g_state.screen + kScreenCancel) && g_state.direct) return false;
     if (code == R32(g_state.screen + kScreenCancel)) {
         ClosePage(ctx);
         return true;
@@ -360,7 +368,7 @@ bool TakeListButton(X86Context& ctx, uint32_t code) {
     bool accept = code == R32(g_state.screen + kScreenAccept);
     if (accept && OnNfsDemo()) return true;
     int entry = CursorIndex() - g_layout.stock;
-    bool on_entry = entry >= 0 && entry < kEntryCount;
+    bool on_entry = entry >= 0 && entry < EntryCount();
     if (!on_entry || !accept) return false;
     OpenPage(ctx, entry);
     return true;
@@ -400,7 +408,7 @@ bool Matches(uint32_t object) {
     if (R32(object + kScreenColumns) != 1) return false;
     int rows = int(R32(object + kScreenRows));
     bool ours = PageOpen() && rows == PageSlots();
-    return rows == g_layout.stock || rows == g_layout.stock + kEntryCount || ours;
+    return rows == g_layout.stock || rows == g_layout.stock + EntryCount() || ours;
 }
 
 // the newest open menu screen with the rows the menu drew
@@ -625,6 +633,20 @@ void Widen(uint32_t data) {
     if (align != kAlignLeft) left -= grow;
 }
 
+// the field drawn with another text, its box widened so the text keeps one line
+void DrawRelabelled(X86Context& ctx, uint32_t field, const std::string& text) {
+    static const uint32_t data = mem::AllocSystem(kFieldBytes + kTextBytes);
+    std::memcpy(HostPtr(data), HostPtr(field), kFieldBytes);
+    WriteText(data + kFieldBytes, text);
+    W32(data + kFieldShown, data + kFieldBytes);
+    Widen(data);
+    X86Context saved = ctx;
+    g_copying = true;
+    CallGuest(ctx, kDrawField, {data, 0});
+    g_copying = false;
+    ctx = saved;
+}
+
 // a copy of the field being drawn, with its own text, look and place
 void DrawCopy(X86Context& ctx, uint32_t field, const Field& seen, const Copy& copy) {
     static const uint32_t data = mem::AllocSystem(kFieldBytes + kTextBytes);
@@ -711,11 +733,27 @@ int OptionsMenuStockRows(uint32_t screen) {
 
 int OptionsMenuIndexAt(int slot) { return PageOpen() ? slot : g_state.list_top + slot; }
 
+void OpenOptionsPage(int page) { g_tab_page = page; }
+
+// in the pad's turn, so the page's first focus is the screens' own
+void OptionsMenuFocus(X86Context& ctx) {
+    bool pause = g_layout.menu == kPause && OwnsScreen(g_state.screen);
+    if (g_tab_page < 0 || !pause || PageOpen()) return;
+    OpenPage(ctx, g_tab_page);
+    g_state.direct = true;
+    g_tab_page = -1;
+}
+
 // the Apt text field draw, cdecl (field, unused): a page hides the stock rows and draws its own
 X86_EXTERN_FUNC(__imp__sub_00413E50);
 X86_FUNC(sub_00413E50) {
     if (g_copying) return __imp__sub_00413E50(ctx, base);
     uint32_t data = R32(ctx.esp + 4);
+    if (const char* label = PauseTabLabel()) {
+        DrawRelabelled(ctx, data, MenuText(label));
+        Return(ctx, 0, 0);
+        return;
+    }
     Place place = DrawnPlace();
     std::optional<Field> seen = Observe(data, place);
     if ((PageOpen() || ListScrolled()) && InRows(place)) {
@@ -733,7 +771,9 @@ X86_FUNC(sub_00413E50) {
 X86_EXTERN_FUNC(__imp__sub_0001DA08);
 X86_FUNC(sub_0001DA08) {
     X86Context saved = ctx;
-    bool taken = TakeButton(ctx, ctx.ecx, R32(ctx.esp + 8));
+    uint32_t screen = ctx.ecx;
+    uint32_t code = R32(ctx.esp + 8);
+    bool taken = TakePauseTabButton(ctx, screen, code) || TakeButton(ctx, screen, code);
     ctx = saved;
     if (taken) {
         Return(ctx, 0, 2);
@@ -746,7 +786,9 @@ X86_FUNC(sub_0001DA08) {
 X86_EXTERN_FUNC(__imp__sub_00011299);
 X86_FUNC(sub_00011299) {
     X86Context saved = ctx;
-    bool taken = TakeHeldButton(ctx, ctx.ecx, R32(ctx.esp + 8));
+    uint32_t screen = ctx.ecx;
+    uint32_t code = R32(ctx.esp + 8);
+    bool taken = HoldPauseTabButton(screen) || TakeHeldButton(ctx, screen, code);
     ctx = saved;
     if (taken) {
         Return(ctx, 0, 2);
