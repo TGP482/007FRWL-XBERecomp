@@ -487,6 +487,15 @@ at = 0xA6FC5
 call = "KeepDroppedItem"
 on_true = 0xA6FD8
 
+# object distance windows, after the zoom scale is made: the draw distance setting divides it
+[[hook]]
+at = 0x365A48
+call = "AllObjectsDrawDistance"
+
+[[hook]]
+at = 0x3644A9
+call = "OneObjectDrawDistance"
+
 # film update: no wait for each film frame, the shown frame is held until the next is due
 [[hook]]
 at = 0x362CC5

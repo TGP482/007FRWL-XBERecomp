@@ -273,6 +273,7 @@ const app::GameInfo app::kGame = {
         {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},
         {"audio_output", nullptr, &game::Opt().audio_output},
         {"msaa", nullptr, &game::Opt().msaa},
+        {"draw_distance", nullptr, &game::Opt().draw_distance},
         {"smaa", &game::Opt().smaa, nullptr},
         {"fov", nullptr, &game::Opt().fov},
         {"fmv_scale", nullptr, &game::Opt().fmv_scale},

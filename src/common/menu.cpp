@@ -100,6 +100,8 @@ constexpr uint32_t kAnisoValues[] = {0, 2, 4, 8, 16};
 const char* const kAnisoNames[] = {"GAME DEFAULT", "2x", "4x", "8x", "16x"};
 constexpr uint32_t kMsaaValues[] = {0, 2, 4, 8};
 const char* const kMsaaNames[] = {"OFF", "2x", "4x", "8x"};
+constexpr uint32_t kDrawDistances[] = {1, 2, 4, 8};
+const char* const kDrawDistanceNames[] = {"GAME DEFAULT", "2x", "4x", "8x"};
 constexpr uint32_t kAoValues[] = {0, 1, 2};
 const char* const kAoNames[] = {"OFF", "SSAO", "GTAO"};
 constexpr uint32_t kFmvScales[] = {0, 1};
@@ -333,6 +335,10 @@ std::string StepAniso(Settings& s, int step) { return kAnisoNames[StepTable(kAni
 
 std::string StepMsaa(Settings&, int step) { return kMsaaNames[StepTable(kMsaaValues, game::Opt().msaa, step)]; }
 
+std::string StepDrawDistance(Settings&, int step) {
+    return kDrawDistanceNames[StepTable(kDrawDistances, game::Opt().draw_distance, step)];
+}
+
 std::string StepSmaa(Settings&, int step) {
     bool& on = game::Opt().smaa;
     if (step) on = !on;
@@ -517,6 +523,7 @@ enum RowId {
     kSkippableCutscenesRow,
     kFreeAimRow,
     kPersistentBodiesRow,
+    kDrawDistanceRow,
     kPlayer1Row,
     kPlayer2Row,
     kPlayer3Row,
@@ -549,6 +556,7 @@ constexpr StepFn kSteps[] = {
     StepSkippableCutscenes,
     StepFreeAim,
     StepPersistentBodies,
+    StepDrawDistance,
     StepPlayerPort<0>,
     StepPlayerPort<1>,
     StepPlayerPort<2>,
@@ -580,6 +588,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kSmaaRow, "SMAA"},
     {Kind::Value, kAnisoRow, "ANISOTROPIC FILTERING"},
     {Kind::Value, kAmbientOcclusionRow, "AMBIENT OCCLUSION"},
+    {Kind::Value, kDrawDistanceRow, "DRAW DISTANCE"},
     {Kind::Heading, -1, "GENERAL"},
     {Kind::Value, kSkipIntrosRow, "SKIP INTROS"},
     {Kind::Value, kSkippableCutscenesRow, "SKIPPABLE CUTSCENES"},
@@ -963,6 +972,7 @@ void RestoreDefaults(int page) {
         game::Opt().ambient_occlusion = defaults.ambient_occlusion;
         game::Opt().audio_output = defaults.audio_output;
         game::Opt().msaa = defaults.msaa;
+        game::Opt().draw_distance = defaults.draw_distance;
         game::Opt().smaa = defaults.smaa;
         game::Opt().fov = defaults.fov;
         game::Opt().monitor = defaults.monitor;
