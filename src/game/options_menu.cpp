@@ -12,6 +12,7 @@
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "common/translations.h"
+#include "core/log.h"
 #include "game/flash.h"
 #include "game/menu_ports.h"
 #include "game/options_menu.h"
@@ -51,6 +52,8 @@ constexpr uint32_t kButtonLeft = 2;
 constexpr uint32_t kButtonRight = 3;
 constexpr uint32_t kButtonUp = 4;
 constexpr uint32_t kButtonDown = 5;
+constexpr uint32_t kDirectionCodes = 1u << kButtonLeft | 1u << kButtonRight;
+constexpr uint32_t kScreenCodes = 0x74;  // its listener's bit per button code it takes
 
 // every live UI object, the menu screens among them
 constexpr uint32_t kObjects = 0x8375E4;
@@ -88,6 +91,7 @@ constexpr uint32_t kScreenHeldWait = 0xE8;
 constexpr uint32_t kHeldDelay = 0x6921DC;      // float: the wait after each step
 constexpr uint32_t kFrameSeconds = 0x824358;  // float
 constexpr uint32_t kNoCode = 0xFFFFFFFF;
+constexpr uint32_t kHeldStart = 0x691124;  // float: the wait before the first repeat
 
 // the pause menu's title shows the recomp tab's name
 const char* const kPauseTitle = "$PAUSE_OPTIONS";
@@ -195,6 +199,7 @@ struct State {
     bool direct = false;  // the page opened from a pause tab, its back leaves the menu
     const Row* section = nullptr;  // the category open, null for the page's list of them
     std::vector<const Row*> rows;  // the page's rows on show; null restores the page's defaults
+    uint32_t added_codes = 0;  // left and right, given to the screen while a page is open
 };
 
 // where a page's lines are hit, from the last one drawn: screen pixels
@@ -383,6 +388,18 @@ void SetRows(int rows) {
     W32(g_state.screen + kScreenCount, uint32_t(rows));
 }
 
+// a page steps values with left and right, which a list screen may not take
+void UpdateCodes() {
+    uint32_t codes = R32(g_state.screen + kScreenCodes);
+    if (PageOpen()) {
+        g_state.added_codes |= kDirectionCodes & ~codes;
+        W32(g_state.screen + kScreenCodes, codes | kDirectionCodes);
+    } else if (g_state.added_codes) {
+        W32(g_state.screen + kScreenCodes, codes & ~g_state.added_codes);
+        g_state.added_codes = 0;
+    }
+}
+
 // as the screen's own input moves it: OnDeselect and OnSelect follow, and their sound when the cursor stays
 void MoveCursor(X86Context& ctx, int index) {
     if (index == CursorIndex()) return ReselectRow(ctx, g_state.screen);
@@ -405,6 +422,7 @@ void ShowRows(X86Context& ctx, int focus) {
 void OpenPage(X86Context& ctx, int page) {
     g_state.page = page;
     g_state.section = nullptr;
+    UpdateCodes();
     ShowRows(ctx, 0);
 }
 
@@ -426,6 +444,7 @@ void ClosePage(X86Context& ctx) {
     int entry = g_state.page;
     g_state.page = -1;
     g_state.rows.clear();
+    UpdateCodes();
     SetRows(g_layout.stock + EntryCount());
     MoveCursor(ctx, g_layout.stock + entry);
 }
@@ -436,6 +455,7 @@ void LeavePage() {
     g_state.section = nullptr;
     g_state.direct = false;
     g_state.rows.clear();
+    UpdateCodes();
     SetRows(g_layout.stock + EntryCount());
 }
 
@@ -566,6 +586,20 @@ bool TakeHeldButton(X86Context& ctx, uint32_t screen, uint32_t code) {
     return true;
 }
 
+// a page's left and right, which a stock row's own value screen above it would take instead
+uint32_t PageScreenFor(uint32_t screen, uint32_t code) {
+    bool across = code == kButtonLeft || code == kButtonRight;
+    bool other = screen != g_state.screen && R32(screen) == kMenuScreenVtable;
+    return PageOpen() && across && other && OwnsScreen(g_state.screen) ? g_state.screen : screen;
+}
+
+// as the screen's own release does (0x1C59A0)
+void ReleaseHeld(uint32_t screen, uint32_t code) {
+    if (R32(screen + kScreenHeldCode) != code) return;
+    W32(screen + kScreenHeldCode, kNoCode);
+    W32(screen + kScreenHeldWait, R32(kHeldStart));
+}
+
 // Finding the menu.
 
 bool Matches(uint32_t object, bool input) {
@@ -634,6 +668,7 @@ void UpdateScreen() {
     if (!screen) return;
     int rows = WantedRows();
     if (int(R32(screen + kScreenRows)) != rows) SetRows(rows);
+    UpdateCodes();
     UpdateListTop();
 }
 
@@ -1043,7 +1078,10 @@ X86_FUNC(sub_0001DA08) {
     X86Context saved = ctx;
     uint32_t screen = ctx.ecx;
     uint32_t code = R32(ctx.esp + 8);
-    bool taken = TakePauseTabButton(ctx, screen, code) || TakeButton(ctx, screen, code);
+    uint32_t page = PageScreenFor(screen, code);
+    // TEMPORARY trace
+    if (page != screen) LOGR("options menu: button %u from screen %08X goes to the page", code, screen);
+    bool taken = TakePauseTabButton(ctx, screen, code) || TakeButton(ctx, page, code);
     ctx = saved;
     if (taken) {
         Return(ctx, 0, 2);
@@ -1058,11 +1096,22 @@ X86_FUNC(sub_00011299) {
     X86Context saved = ctx;
     uint32_t screen = ctx.ecx;
     uint32_t code = R32(ctx.esp + 8);
-    bool taken = HoldPauseTabButton(screen) || TakeHeldButton(ctx, screen, code);
+    bool taken = HoldPauseTabButton(screen) || TakeHeldButton(ctx, PageScreenFor(screen, code), code);
     ctx = saved;
     if (taken) {
         Return(ctx, 0, 2);
     } else {
         __imp__sub_00011299(ctx, base);
     }
+}
+
+// a menu screen lets a held button go, thiscall (port, button): a page's own direction ends its repeat
+X86_EXTERN_FUNC(__imp__sub_00018EF4);
+X86_FUNC(sub_00018EF4) {
+    uint32_t screen = ctx.ecx;
+    uint32_t code = R32(ctx.esp + 8);
+    uint32_t page = PageScreenFor(screen, code);
+    if (page == screen) return __imp__sub_00018EF4(ctx, base);
+    ReleaseHeld(page, code);
+    Return(ctx, 0, 2);
 }

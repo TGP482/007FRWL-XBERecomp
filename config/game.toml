@@ -516,3 +516,9 @@ on_true = 0x362E91
 at = 0x362D5F
 call = "FilmSkipWait"
 on_true = 0x362D89
+
+# film clock thread tick: the clock holds while the game waits for the window's focus, so a film does not race on return
+[[hook]]
+at = 0x4D0080
+call = "FilmClockHeld"
+on_true = 0x4D008E
