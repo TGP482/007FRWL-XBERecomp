@@ -9,6 +9,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <optional>
@@ -297,13 +298,25 @@ struct Span {
     float right;
 };
 
-Span SpanOf(X86Context& ctx, uint32_t clip) {
-    static const uint32_t out = mem::AllocSystem(4 * sizeof(float));
+struct Box {
+    float left;
+    float top;
+    float right;
+    float bottom;
+};
+
+Box BoxOf(X86Context& ctx, uint32_t clip) {
+    static const uint32_t out = mem::AllocSystem(sizeof(Box));
     uint32_t ecx = ctx.ecx;
     ctx.ecx = clip;
     CallGuest(ctx, kClipBox, {out});
     ctx.ecx = ecx;
-    return {G<float>(out), G<float>(out + 8)};
+    return G<Box>(out);
+}
+
+Span SpanOf(X86Context& ctx, uint32_t clip) {
+    Box box = BoxOf(ctx, clip);
+    return {box.left, box.right};
 }
 
 float LeftOf(X86Context& ctx, uint32_t clip) { return SpanOf(ctx, clip).left; }
@@ -431,11 +444,41 @@ std::optional<RowItem> RowItemOf(X86Context& ctx, const LegendClip& legend) {
 using RowKey = std::pair<uint32_t, long>;
 RowKey RowOf(uint32_t clip) { return {R32(clip + kClipParent), std::lround(G<float>(clip + kMatrixTy))}; }
 
-std::map<RowKey, Span> g_dropped_spans;  // the room the Return legends dropped this tick had in their row
+constexpr float kBackgroundShare = 0.9f;  // a sibling this share of the page wide is the page's backdrop, not a bar
 
-// legends of one parent are packed so each longer label ends before the next begins, and the row keeps the middle of
-// every legend it was made with, a dropped Return legend included, as the main menu's rows do
-void LayOutRow(X86Context& ctx, const std::vector<LegendClip>& row, std::optional<Span> dropped) {
+bool IsLegend(uint32_t clip) {
+    auto same = [clip](const LegendClip& legend) { return legend.clip == clip; };
+    return g_dropped.count(clip) || std::any_of(g_legends.clips.begin(), g_legends.clips.end(), same);
+}
+
+// The bar a row of legends sits on: the narrowest shown sibling across the row's line and the legends' middle. The
+// pause menu's legends were laid out for a Return legend that keyboard play drops, so their own middle is off the bar
+std::optional<Span> BarOf(X86Context& ctx, uint32_t parent, float line, Span legends) {
+    Span parent_span = SpanOf(ctx, parent);
+    float page = parent_span.right - parent_span.left;
+    float middle = (legends.left + legends.right) / 2;
+    std::optional<Span> bar;
+    for (uint32_t child : Children(parent)) {
+        if (!Shown(child) || IsLegend(child)) continue;
+        Box box = BoxOf(ctx, child);
+        float width = box.right - box.left;
+        bool across = box.top <= line && line <= box.bottom && box.left <= middle && middle <= box.right;
+        bool sized = width >= legends.right - legends.left && width < page * kBackgroundShare;
+        if (!across || !sized) continue;
+        if (!bar || width < bar->right - bar->left) bar = Span{box.left, box.right};
+    }
+    return bar;
+}
+
+// a Return legend of this parent was dropped, so the others sit off the middle their page laid them out for
+bool LostReturn(uint32_t parent) {
+    auto same = [parent](uint32_t clip) { return R32(clip + kClipParent) == parent; };
+    return std::any_of(g_dropped.begin(), g_dropped.end(), same);
+}
+
+// legends of one parent are packed so each longer label ends before the next begins and keep their middle; a row that
+// lost its Return legend is centred on its bar instead
+void LayOutRow(X86Context& ctx, const std::vector<LegendClip>& row) {
     std::vector<RowItem> items;
     for (const LegendClip& legend : row) {
         std::optional<RowItem> item = RowItemOf(ctx, legend);
@@ -452,8 +495,12 @@ void LayOutRow(X86Context& ctx, const std::vector<LegendClip>& row, std::optiona
         shifts[i] = left - items[i].left;
         right = left + items[i].width;
     }
-    if (dropped) made = {std::min(made.left, dropped->left), std::max(made.right, dropped->right)};
-    float centre = (items.front().left + right) / 2 - (made.left + made.right) / 2;
+    uint32_t first = row.front().clip;
+    uint32_t parent = R32(first + kClipParent);
+    std::optional<Span> bar;
+    if (LostReturn(parent)) bar = BarOf(ctx, parent, G<float>(first + kMatrixTy), made);
+    Span target = bar ? *bar : made;
+    float centre = (items.front().left + right) / 2 - (target.left + target.right) / 2;
     for (size_t i = 0; i < items.size(); i++) {
         float scale = G<float>(items[i].legend->clip + kClipMatrix);  // the texts move in the legend's units
         if (scale != 0) PlaceLegend(*items[i].legend, (shifts[i] - centre) / scale);
@@ -464,9 +511,7 @@ void LayOutLegends(X86Context& ctx) {
     std::map<RowKey, std::vector<LegendClip>> rows;
     for (const LegendClip& legend : g_legends.clips) rows[RowOf(legend.clip)].push_back(legend);
     for (const auto& [key, row] : rows) {
-        auto dropped = g_dropped_spans.find(key);
-        bool had_drop = dropped != g_dropped_spans.end();
-        if (row.size() > 1 || had_drop) LayOutRow(ctx, row, had_drop ? std::optional(dropped->second) : std::nullopt);
+        if (row.size() > 1) LayOutRow(ctx, row);
     }
 }
 
@@ -780,19 +825,16 @@ void Visit(X86Context& ctx, uint32_t clip, int depth, bool keyboard) {
 bool Leads(const LegendClip& legend, int button) { return legend.buttons.first == button; }
 
 // the pause page's Return is the controller's START: on the keyboard it reads as the pause key, as Back does
-void DropReturnLegends(X86Context& ctx) {
+void DropReturnLegends() {
     auto& clips = g_legends.clips;
     bool back = std::any_of(clips.begin(), clips.end(), [](const LegendClip& legend) { return Leads(legend, kB); });
     if (!back) return;
-    auto dropped = [](const LegendClip& legend) { return Leads(legend, kStart) && Shown(legend.clip); };
     for (const LegendClip& legend : clips) {
-        if (!dropped(legend)) continue;
-        Span room = SpanOf(ctx, legend.clip);
-        Span& row = g_dropped_spans.try_emplace(RowOf(legend.clip), room).first->second;
-        row = {std::min(row.left, room.left), std::max(row.right, room.right)};
+        if (!Leads(legend, kStart) || !Shown(legend.clip)) continue;
         SetShown(legend.clip, false);
         g_dropped.insert(legend.clip);
     }
+    auto dropped = [](const LegendClip& legend) { return g_dropped.count(legend.clip) != 0; };
     clips.erase(std::remove_if(clips.begin(), clips.end(), dropped), clips.end());
 }
 
@@ -807,13 +849,12 @@ void UpdateLegends(X86Context& ctx) {
     bool keyboard = input::KeyboardActive();
     g_legends.texts.clear();
     g_legends.clips.clear();
-    g_dropped_spans.clear();
     if (!keyboard && !g_legends.hidden) return;
     g_legends.visits = 0;
     for (uint32_t level : Levels()) Visit(ctx, level, 0, keyboard);
     g_dropped.clear();  // what was not visited again is gone
     ForgetMoved();
-    if (keyboard) DropReturnLegends(ctx);
+    if (keyboard) DropReturnLegends();
     UpdatePlaced(keyboard);
     if (keyboard) LayOutLegends(ctx);
     if (!keyboard) g_moved.clear();
