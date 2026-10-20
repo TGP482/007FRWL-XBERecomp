@@ -411,7 +411,8 @@ bool HeldBack(int vk) {
     return false;
 }
 
-bool PlayDown(int vk) { return Down(vk) && !HeldBack(vk); }
+// the held back list is checked first, so a key let go leaves it
+bool PlayDown(int vk) { return !HeldBack(vk) && Down(vk); }
 
 const char* SectionHeading(Section section) {
     switch (section) {
