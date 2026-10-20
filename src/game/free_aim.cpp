@@ -83,6 +83,12 @@ constexpr uint32_t kWorldLineTest = 0x2839D0;  // thiscall on the world (line, n
 // a damage message: the shooter's link
 constexpr uint32_t kMessageShooter = 4;
 
+// Red Grant's focus parts are only shootable while focus mode asks for them, which it does every frame
+constexpr uint32_t kGameTime = 0x824360;  // ms
+constexpr uint32_t kGrantFocusAsked = 0xF78;  // last time asked, the parts reset after 250 ms without
+constexpr uint32_t kGrantFocusPoints = 0x1E61F;  // thiscall(points out): turns on the part to shoot next
+constexpr uint32_t kFocusPointsSize = 4 * 12;
+
 // nearest hit callback, its line, ignore list and our end point after it
 constexpr uint32_t kNearestHitVtable = 0x691430;
 constexpr uint32_t kHitBest = 0x04;
@@ -148,15 +154,22 @@ bool InFreeAim(uint32_t player) {
 }
 
 // focus targets take a hit only from a shooter in focus lock: lends it to a free aim shooter, returns them or 0
-uint32_t LendFocusLock(uint32_t message) {
-    uint32_t link = R32(message + kMessageShooter);
-    if (!link || link == kLinkOffset) return 0;
-    uint32_t player = link - kLinkOffset;
+uint32_t LendFocusLock(uint32_t player) {
     if (!InFreeAim(player)) return 0;
     uint32_t flags = R32(player + kPlayerAimFlags);
     if (flags & kAimFlagFocusLock) return 0;
     W32(player + kPlayerAimFlags, flags | kAimFlagFocusLock);
     return player;
+}
+
+void ReturnFocusLock(uint32_t player) {
+    if (player) W32(player + kPlayerAimFlags, R32(player + kPlayerAimFlags) & ~kAimFlagFocusLock);
+}
+
+uint32_t Shooter(uint32_t message) {
+    uint32_t link = R32(message + kMessageShooter);
+    if (!link || link == kLinkOffset) return 0;
+    return link - kLinkOffset;
 }
 
 uint32_t CurrentGun(X86Context& ctx, uint32_t player) {
@@ -345,11 +358,12 @@ X86_FUNC(sub_00019BD3) {
     WriteVec(player + kPlayerAimPoint, aim_point);
 }
 
-// focus target damage checks, thiscall(message), each run with the focus lock lent
-static void CheckAsFocusShot(X86Context& ctx, uint8_t* base, void (*check)(X86Context&, uint8_t*)) {
-    uint32_t lent = LendFocusLock(R32(ctx.esp + 4));
+// focus target damage checks, thiscall with the message at esp + message_arg, each run with the focus lock lent
+static void CheckAsFocusShot(X86Context& ctx, uint8_t* base, void (*check)(X86Context&, uint8_t*),
+                             uint32_t message_arg = 4) {
+    uint32_t lent = LendFocusLock(Shooter(R32(ctx.esp + message_arg)));
     check(ctx, base);
-    if (lent) W32(lent + kPlayerAimFlags, R32(lent + kPlayerAimFlags) & ~kAimFlagFocusLock);
+    ReturnFocusLock(lent);
 }
 
 // FocusDestructible damage filter (mode 7)
@@ -371,3 +385,20 @@ X86_FUNC(sub_00013ABC) { CheckAsFocusShot(ctx, base, __imp__sub_00013ABC); }
 // a hit near an enemy's focus point
 X86_EXTERN_FUNC(__imp__sub_000153D0);
 X86_FUNC(sub_000153D0) { CheckAsFocusShot(ctx, base, __imp__sub_000153D0); }
+
+// Station T boss helicopter damage, its focus parts
+X86_EXTERN_FUNC(__imp__sub_0001E075);
+X86_FUNC(sub_0001E075) { CheckAsFocusShot(ctx, base, __imp__sub_0001E075); }
+
+// Red Grant damage, thiscall with the message second: free aim asks for his focus parts as focus mode would
+X86_EXTERN_FUNC(__imp__sub_0001B122);
+X86_FUNC(sub_0001B122) {
+    static const uint32_t points = mem::AllocSystem(kFocusPointsSize);
+    uint32_t grant = ctx.ecx;
+    if (InFreeAim(Shooter(R32(ctx.esp + 8)))) {
+        W32(grant + kGrantFocusAsked, R32(kGameTime));
+        CallGuest(ctx, kGrantFocusPoints, {points});
+    }
+    ctx.ecx = grant;
+    CheckAsFocusShot(ctx, base, __imp__sub_0001B122, 8);
+}
