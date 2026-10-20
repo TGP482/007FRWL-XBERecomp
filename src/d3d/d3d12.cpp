@@ -903,6 +903,8 @@ private:
     void EnsureVertexShader(const State& s, const Assembled& a, DrawShaders& sh);
     bool BindStageTexturesAndTargets(const State& s, DrawTextures& stages);
     void ApplyAtlasClamp(const State& s, const Assembled& a, DrawTextures& stages);
+    void SpreadScopeMask(Assembled& a);
+    void ClampScopeMask(const State& s, DrawTextures& stages);
     ID3D12Resource* BindTexture(const State& s, int stage, DrawTextures& stages);
     ID3D12Resource* BindTargetTexture(const State& s, int stage, const TextureDesc& d, Target& t, bool box,
                                       DrawTextures& stages);
@@ -1200,6 +1202,7 @@ private:
     std::atomic<uint64_t> presents_seen_{0};    // presents_ for DeliverLate
     std::atomic<uint64_t> present_fence_[kFrames + 1] = {};  // by presents_, for WaitGpuFrame
     Assembled asm_;  // kept between draws for its buffers
+    std::vector<uint8_t> scope_vertices_;  // the scope mask's vertices with u spread to the output aspect
     bool tearing_ = false;
     // HDR10 output: the window's display, the output asked and in use, the frame and panel targets it draws first
     HMONITOR hdr_mon_ = nullptr;
@@ -3192,6 +3195,38 @@ D3D12_SRV_DIMENSION NullViewDimension(uint8_t kind) {
     return D3D12_SRV_DIMENSION_TEXTURE2D;
 }
 
+// The sniper scope's mask: a quad in screen positions over the whole 640x480 screen, its program passes v0 and v9
+// through (the library's own 2D quads read texture coordinates from register 2). On widescreen its u is spread about
+// the middle, so the circle keeps its shape and the clamped black edge fills the sides
+constexpr int kPositionReg = 0;
+constexpr int kMaskTexcoordReg = 9;
+constexpr int kIm2DTexcoordReg = 2;
+constexpr uint32_t kQuadCorners = 4;
+constexpr float kScreenWidth = 640;
+constexpr float kScreenHeight = 480;
+
+bool IsScopeMask(const State& s, const Assembled& a) {
+    if (!game::Wide() || !s.textures[0]) return false;
+    if (!a.vertices.empty() || a.vertex_count != kQuadCorners) return false;
+    bool mask_texcoords = (a.regs >> kMaskTexcoordReg & 1) && !(a.regs >> kIm2DTexcoordReg & 1);
+    if (!mask_texcoords || !FloatCount(a.elements[kMaskTexcoordReg].format)) return false;
+    const VertexElement& e = a.elements[kPositionReg];
+    const VertexBuffer& vb = a.buffers[e.buffer];
+    if (FloatCount(e.format) < 2 || !vb.src || !vb.stride) return false;
+    if (uint64_t(a.vertex_count) * vb.stride > vb.bytes) return false;
+    float lo[2] = {kScreenWidth, kScreenHeight};
+    float hi[2] = {0, 0};
+    for (uint32_t v = 0; v < a.vertex_count; v++) {
+        float p[2];
+        std::memcpy(p, vb.src + size_t(v) * vb.stride + e.offset, sizeof(p));
+        for (int i = 0; i < 2; i++) {
+            lo[i] = std::min(lo[i], p[i]);
+            hi[i] = std::max(hi[i], p[i]);
+        }
+    }
+    return lo[0] == 0 && lo[1] == 0 && hi[0] == kScreenWidth && hi[1] == kScreenHeight;
+}
+
 // A small draw whose every float2 input lies in 0..1: sprites, HUD pieces, text, full screen passes. The console's
 // pixel centres sample such a quad from its first texel to half a texel short of its far edge; upscaled, the far
 // edge's last half texel is drawn too, and wrapped it blends in the opposite edge (thin dark lines on HUD sprites).
@@ -3275,6 +3310,35 @@ void D3D12Backend::ApplyAtlasClamp(const State& s, const Assembled& a, DrawTextu
         stages.atlas[2 + i] = std::max(hi[i] - half[i], stages.atlas[i]);
     }
     info.flags |= kTexAtlasClamp;
+}
+
+// u = 0.5 + (u - 0.5) / narrow on a copy of the vertices, the guest's own are left as they are
+void D3D12Backend::SpreadScopeMask(Assembled& a) {
+    const VertexElement& e = a.elements[kMaskTexcoordReg];
+    VertexBuffer& vb = a.buffers[e.buffer];
+    scope_vertices_.assign(vb.src, vb.src + vb.bytes);
+    float narrow = game::Narrow();
+    for (uint32_t v = 0; v < a.vertex_count; v++) {
+        uint8_t* at = scope_vertices_.data() + size_t(v) * vb.stride + e.offset;
+        float u;
+        std::memcpy(&u, at, sizeof(u));
+        u = 0.5f + (u - 0.5f) / narrow;
+        std::memcpy(at, &u, sizeof(u));
+    }
+    vb.src = scope_vertices_.data();
+}
+
+// u clamped half a texel inside the mask, v left free
+void D3D12Backend::ClampScopeMask(const State& s, DrawTextures& stages) {
+    constexpr float kFree = 1e9f;
+    TextureDesc d;
+    if (!Describe(s.textures[0], d) || !d.width) return;
+    float half = 0.5f / float(d.width);
+    stages.atlas[0] = half;
+    stages.atlas[1] = -kFree;
+    stages.atlas[2] = 1 - half;
+    stages.atlas[3] = kFree;
+    stages.info[0].flags |= kTexAtlasClamp;
 }
 
 // a stage without a texture gets a null view of its kind; the samplers read the views after
@@ -3401,6 +3465,8 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     if (ext_) ext_->BeginDraw(s);
     Assembled& a = asm_;
     if (!AssembleDraw(s, prim, start, count, indices, a)) return;
+    bool scope_mask = IsScopeMask(s, a);
+    if (scope_mask) SpreadScopeMask(a);
     // past the ring every upload is a buffer of its own: seconds lost on a frame that draws a whole level once
     if (CurrentFrame().used > kUploadSize - kUploadReserve) Submit(true);
     if (!BindTargets(s)) return;
@@ -3416,6 +3482,7 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     DrawTextures stages;
     if (!BindStageTexturesAndTargets(s, stages)) return;
     ApplyAtlasClamp(s, a, stages);
+    if (scope_mask) ClampScopeMask(s, stages);
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
     sh.pkey = Hash(&pk, sizeof(pk));
