@@ -56,6 +56,8 @@ constexpr Entry kEntries[] = {
     {"PAUSE ON FOCUS LOSS", {u"Pause en arrière-plan", u"Pause im Hintergrund", u"Pausa in background", u"Pausa en segundo plano"}},
     {"LANGUAGE", {u"Langue", u"Sprache", u"Lingua", u"Idioma"}},
     {"AUDIO OUTPUT", {u"Sortie audio", u"Audioausgabe", u"Uscita audio", u"Salida de audio"}},
+    {"MASTER VOLUME", {u"Volume général", u"Gesamtlautstärke", u"Volume generale", u"Volumen general"}},
+    {"MUSIC VOLUME", {u"Volume de la musique", u"Musiklautstärke", u"Volume musica", u"Volumen de la música"}},
 
     // their values
     {"FULLSCREEN", {u"Plein écran", u"Vollbild", u"Schermo intero", u"Pantalla completa"}},

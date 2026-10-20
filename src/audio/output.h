@@ -36,5 +36,7 @@ void SetOutputMode(uint32_t mode);
 void SetPaused(bool paused);
 // any thread: muted, the mixer keeps running and its output is silence
 void SetMuted(bool muted);
+// any thread: the output's level, 1 as the console
+void SetVolume(float level);
 
 }  // namespace audio

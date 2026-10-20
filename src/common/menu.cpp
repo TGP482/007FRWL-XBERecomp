@@ -128,6 +128,10 @@ constexpr int kWalkMax = 100;
 constexpr int kWalkStep = 5;
 constexpr int kWalkSlots = (kWalkMax - kWalkMin) / kWalkStep + 1;
 
+constexpr int kVolumeMax = 100;  // percent
+constexpr int kVolumeStep = 5;
+constexpr int kVolumeSlots = kVolumeMax / kVolumeStep + 1;
+
 constexpr DWORD kMinModeWidth = 640;
 constexpr DWORD kMinModeBits = 32;
 
@@ -358,6 +362,23 @@ std::string StepAudioOutput(Settings&, int step) {
     return kAudioOutputNames[i];
 }
 
+std::string StepVolume(uint32_t& percent, int step) {
+    if (step) {
+        int slot = StepIndex(std::clamp(int(percent), 0, kVolumeMax) / kVolumeStep, step, kVolumeSlots);
+        percent = uint32_t(slot * kVolumeStep);
+    }
+    return std::to_string(percent) + "%";
+}
+
+std::string StepMasterVolume(Settings&, int step) {
+    uint32_t& percent = game::Opt().master_volume;
+    std::string text = StepVolume(percent, step);
+    audio::SetVolume(float(percent) / kVolumeMax);
+    return text;
+}
+
+std::string StepMusicVolume(Settings&, int step) { return StepVolume(game::Opt().music_volume, step); }
+
 std::string StepSkipIntros(Settings&, int step) {
     bool& on = game::Opt().skip_intros;
     if (step) on = !on;
@@ -563,6 +584,8 @@ enum RowId {
     kAutosaveRow,
     kPadCameraCentringRow,
     kPadFreeAimRow,
+    kMasterVolumeRow,
+    kMusicVolumeRow,
 };
 
 // in RowId order
@@ -601,6 +624,8 @@ constexpr StepFn kSteps[] = {
     StepAutosave,
     StepPadCameraCentring,
     StepPadFreeAim,
+    StepMasterVolume,
+    StepMusicVolume,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -638,6 +663,8 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kInventoryPauseRow, "INVENTORY PAUSE"},
     {Kind::Value, kPauseOnFocusLossRow, "PAUSE ON FOCUS LOSS"},
     {Kind::Value, kAudioOutputRow, "AUDIO OUTPUT"},
+    {Kind::Value, kMasterVolumeRow, "MASTER VOLUME"},
+    {Kind::Value, kMusicVolumeRow, "MUSIC VOLUME"},
     {Kind::Heading, -1, "INPUT DEVICES"},
     {Kind::Value, kPlayer1Row, "PLAYER 1"},
     {Kind::Value, kPlayer2Row, "PLAYER 2"},
@@ -1030,6 +1057,8 @@ void RestoreDefaults(int page) {
         game::Opt().fmv_scale = defaults.fmv_scale;
         game::Opt().ambient_occlusion = defaults.ambient_occlusion;
         game::Opt().audio_output = defaults.audio_output;
+        game::Opt().master_volume = defaults.master_volume;
+        game::Opt().music_volume = defaults.music_volume;
         game::Opt().msaa = defaults.msaa;
         game::Opt().draw_distance = defaults.draw_distance;
         game::Opt().smaa = defaults.smaa;
@@ -1038,6 +1067,7 @@ void RestoreDefaults(int page) {
         game::Opt().pause_on_focus_loss = defaults.pause_on_focus_loss;
         game::Opt().players = defaults.players;
         audio::SetOutputMode(defaults.audio_output);
+        audio::SetVolume(float(defaults.master_volume) / kVolumeMax);
         RestoreSettingsDefaults();
     } else if (page == kControllerPage) {
         const game::Options defaults;

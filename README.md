@@ -46,6 +46,8 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 - **Persistent Bodies** - Prevents the bodies of killed enemies, and the guns and shields they drop, from disappearing.
 - **Inventory Pause** - Toggles the inventory pause.
 - **Pause On Focus Loss** - Pauses the game and its sound while the window is in the background or minimized.
+- **Master Volume** - Adjusts the volume of all game audio.
+- **Music Volume** - Adjusts the volume of the music.
 
 ### Miscellaneous
 - **Boot Splash** - Place a `splash.png` (or `.bmp`) beside the exe to display a splash screen at launch.

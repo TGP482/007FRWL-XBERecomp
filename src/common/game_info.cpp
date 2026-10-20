@@ -237,6 +237,7 @@ void Init() {
     input::LoadBindings();
     input::LoadPadBindings();
     audio::SetOutputMode(Opt().audio_output);
+    audio::SetVolume(float(Opt().master_volume) / 100.0f);
     RemoveUnfinishedSaves();
 }
 
@@ -277,6 +278,8 @@ const app::GameInfo app::kGame = {
         {"hdr_output", &game::Opt().hdr_output, nullptr},
         {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},
         {"audio_output", nullptr, &game::Opt().audio_output},
+        {"master_volume", nullptr, &game::Opt().master_volume},
+        {"music_volume", nullptr, &game::Opt().music_volume},
         {"msaa", nullptr, &game::Opt().msaa},
         {"draw_distance", nullptr, &game::Opt().draw_distance},
         {"smaa", &game::Opt().smaa, nullptr},

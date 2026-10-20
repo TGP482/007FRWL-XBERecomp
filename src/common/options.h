@@ -33,6 +33,8 @@ struct Options {
     bool inventory_pause = true;  // the game pauses while the inventory is open, as on the console
     uint32_t ambient_occlusion = 0;  // screen space, from the scene's depth: 0 off, 1 SSAO, 2 GTAO
     uint32_t audio_output = 0;  // audio::kOutputAuto, kOutputStereo, kOutputSurround or kOutputMono
+    uint32_t master_volume = 100;  // percent of the console's level, every sound
+    uint32_t music_volume = 100;   // percent, the music alone
     float mouse_sensitivity = 1.0f;
     uint32_t msaa = 0;  // samples a pixel of the scene, 0 off
     bool smaa = false;  // over the finished frame, HUD included; combines with msaa

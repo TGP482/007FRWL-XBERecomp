@@ -381,6 +381,11 @@ call = "DrawAutosave"
 at = 0x34D094
 call = "DrawSkipPrompt"
 
+# the same place: a changed music volume reaches the playing music
+[[hook]]
+at = 0x34D094
+call = "ApplyMusicVolume"
+
 # UI widget tree walk, around each widget's Draw: the HUD keeps its shape on widescreen
 [[hook]]
 at = 0x358423
