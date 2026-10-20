@@ -131,6 +131,29 @@ constexpr uint32_t kScopePitchRate = 0x24;
 constexpr uint32_t kScopeSeconds = 0x6C;
 constexpr int kScopeStickXReg = 0;
 
+// the view directors, one a player port; each holds the field of view its frame took, radians across
+constexpr uint32_t kViews = 0x778E64;
+constexpr uint32_t kViewsShared = 0x30;  // one view for every port, as in cutscenes
+constexpr uint32_t kViewDirectors = 0x0C;
+constexpr uint32_t kDirectorCount = 4;
+constexpr uint32_t kDirectorBytes = 0x18C;
+constexpr uint32_t kDirectorFov = 0x1C;
+constexpr uint32_t kFovMin = 45;  // the range field_of_view.cpp takes
+constexpr uint32_t kFovMax = 140;
+constexpr float kPi = 3.14159265f;
+
+// the scope's view over the view from the hip, as tangents: a count turns the same share of the view zoomed or not
+float ScopeZoom(uint32_t player) {
+    uint32_t views = R32(kViews);
+    uint32_t port = R32(player + kPlayerPort);
+    if (!views || R32(views + kViewsShared) || port >= kDirectorCount) return 1.0f;
+    uint32_t director = R32(views + kViewDirectors) + port * kDirectorBytes;
+    float fov = G<float>(director + kDirectorFov);
+    if (!(fov > 0.0f && fov < kPi)) return 1.0f;
+    float hip = float(std::clamp(game::Opt().fov, kFovMin, kFovMax)) * kRadiansPerDegree;
+    return std::tan(fov / 2) / std::tan(hip / 2);
+}
+
 // Lock on fine aim, edi the player: the stick moves the aim point about the target at a rate in xmm2 (x) and
 // xmm5 (y), units a second, the rest from esp.
 
@@ -227,9 +250,10 @@ void ScopeAim(X86Context& ctx, uint8_t*) {
     float seconds = G<float>(ctx.esp + kScopeSeconds);
     float yaw_rate = G<float>(ctx.esp + kScopeYawRate);
     float pitch_rate = G<float>(ctx.esp + kScopePitchRate);
-    ctx.xmm[kScopeStickXReg].f[0] += StickForTurn(move.dx * kRadiansPerCount, yaw_rate, seconds);
+    float per_count = kRadiansPerCount * ScopeZoom(ctx.esi);
+    ctx.xmm[kScopeStickXReg].f[0] += StickForTurn(move.dx * per_count, yaw_rate, seconds);
     // a positive stick y lowers the scope, as it lowers the chase camera
-    G<float>(ctx.esp + kScopeStickY) += StickForTurn(move.dy * kRadiansPerCount, pitch_rate, seconds);
+    G<float>(ctx.esp + kScopeStickY) += StickForTurn(move.dy * per_count, pitch_rate, seconds);
 }
 
 void LockOnAim(X86Context& ctx, uint8_t*) {
