@@ -83,6 +83,9 @@ constexpr Legend kLegends[] = {
     {{29, 21, 30}, {kA}},             // buttonsfrontend continueBtn
     {{26, 27, 21}, {kA}},             // buttonsfrontend speedUpBtn
     {{17, 18, 21}, {kA}},             // buttonsfrontend rematchBtn
+    {{23, 24, 6}, {kY}},              // buttonsfrontend changeOptionsBtn
+    {{2, 3, 6}, {kY}},                // buttonsfrontend skipPurchaseBtn
+    {{14, 15, 6}, {kY}},              // buttonsfrontend playAgainBtn
     {{17, 18}, {kA}, true},           // mprespawn, the text and xBoxButtons bottom
 };
 

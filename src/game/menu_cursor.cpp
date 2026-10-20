@@ -63,6 +63,7 @@ constexpr uint32_t kSetCurrentIndex = 0x19A61;  // thiscall(index): the script d
 // input codes
 constexpr uint32_t kCodeStart = 0;
 constexpr uint32_t kCodeSelect = 1;
+constexpr uint32_t kCodeRight = 3;
 constexpr uint32_t kCodeDown = 5;
 constexpr uint32_t kCodeAccept = 6;
 constexpr uint32_t kCodeCancel = 7;
@@ -156,6 +157,7 @@ struct Pending {
     uint32_t screen = 0;
     std::optional<uint32_t> index;
     bool accept = false;
+    uint32_t item = 0;  // the item's clip, 0 for a recomp line
 };
 
 struct CursorState {
@@ -579,6 +581,35 @@ input::PageKeys KeysOf(uint32_t screen) {
     return {accept, TapFor(R32(screen + kScreenCancel), input::Tap::B)};
 }
 
+bool Inside(uint32_t clip, uint32_t ancestor) {
+    for (int i = 0; clip && i < kMaxParents; i++, clip = R32(clip + kClipParent)) {
+        if (clip == ancestor) return true;
+    }
+    return false;
+}
+
+// The multiplayer rules rows each keep a page of values inside them that takes right and left; their accept moves
+// to the next row. A click on such a row steps its value right
+bool CyclesRight(uint32_t screen, uint32_t item) {
+    uint32_t manager = R32(kListenerManager);
+    int keyboard = input::KeyboardPort();
+    if (!item || !manager || keyboard < 0) return false;
+    uint32_t first = R32(manager + kManagerFirst);
+    uint32_t end = R32(manager + kManagerEnd);
+    for (uint32_t at = first; first && at < end; at += 4) {
+        uint32_t listener = R32(at);
+        bool port = R32(listener + kListenerPorts) >> keyboard & 1;
+        bool right = R32(listener + kListenerCodes) >> kCodeRight & 1;
+        if (!port || !right || R32(listener) != kScreenListenerVtable) continue;
+        uint32_t values = R32(listener + kListenerOwner);
+        if (values == screen || R32(values) != kMenuScreenVtable) continue;
+        uint32_t script = R32(values + kScreenScript);
+        uint32_t path = script ? R32(script + kScriptPath) : 0;
+        if (Readable(path) && Inside(Resolve(Text(path)), item)) return true;
+    }
+    return false;
+}
+
 // one jump to the item, then the click's accept, which the pad reads after it
 void ApplyPending(X86Context& ctx) {
     Pending pending = g_state.pending;
@@ -588,14 +619,16 @@ void ApplyPending(X86Context& ctx) {
         ctx.ecx = pending.screen;
         CallGuest(ctx, kSetCurrentIndex, {*pending.index});
     }
-    if (pending.accept) input::Press(KeysOf(pending.screen).accept);
+    if (!pending.accept) return;
+    bool cycles = CyclesRight(pending.screen, pending.item);
+    input::Press(cycles ? input::Tap::Right : KeysOf(pending.screen).accept);
 }
 
 // the item the cursor is on, pressed by a click or by a click on it waiting for its jump
-void PointAt(uint32_t screen, uint32_t index, Edges edges) {
+void PointAt(uint32_t screen, uint32_t index, Edges edges, uint32_t item = 0) {
     Pending& pending = g_state.pending;
     bool clicked = pending.accept && pending.screen == screen && pending.index == index;
-    pending = {screen, index, edges.click || clicked};
+    pending = {screen, index, edges.click || clicked, item};
 }
 
 void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
@@ -634,7 +667,8 @@ void ApplyPointer(X86Context& ctx, uint32_t screen, Point stage, Edges edges) {
     uint32_t slot = order == Order::Reverse ? last - *hit : *hit;
     if (tabs) PointPauseTab(extra ? tab : int(slot));
     uint32_t index = options ? uint32_t(OptionsMenuIndexAt(int(slot))) : slot;
-    PointAt(screen, index, edges);
+    uint32_t item = options || extra ? 0 : items->clips[*hit];
+    PointAt(screen, index, edges, item);
 }
 
 // a new page starts from where the cursor rests: only a move or a click after that acts
