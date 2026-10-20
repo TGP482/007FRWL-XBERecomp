@@ -12,6 +12,7 @@
 #include <cstring>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -64,10 +65,12 @@ struct Buttons {
 };
 
 // a legend by the characters its first frame places in order: the shadow, the picture and the text, or the two texts
-// and then the picture. Character ids are the movie's own
+// and then the picture, or one text and the picture. Character ids are the movie's own, 0 ends a shorter list.
+// A legend shown in play names the key play gives the button
 struct Legend {
-    uint32_t places[3];
+    std::array<uint32_t, 3> places;
     Buttons buttons;
+    bool play = false;
 };
 constexpr Legend kLegends[] = {
     {{14, 12, 15}, {kB}},             // xBoxButtons backBtn
@@ -78,6 +81,9 @@ constexpr Legend kLegends[] = {
     {{44, 43, 45}, {kA}},             // selectBtn
     {{218, 219, 220}, {kA}},          // the briefcase's equip legend
     {{29, 21, 30}, {kA}},             // buttonsfrontend continueBtn
+    {{26, 27, 21}, {kA}},             // buttonsfrontend speedUpBtn
+    {{17, 18, 21}, {kA}},             // buttonsfrontend rematchBtn
+    {{17, 18}, {kA}, true},           // mprespawn, the text and xBoxButtons bottom
 };
 
 // a pad button in a text, "[RDDown]", by the start of its name: other languages add their own letters ("[RSTopFR]")
@@ -123,6 +129,7 @@ constexpr uint32_t kMaxFrameItems = 64;
 struct LegendText {
     std::string text;
     Buttons buttons;
+    bool play;
 };
 
 // a legend clip on screen and its text clips, the shadow and the text
@@ -130,6 +137,7 @@ struct LegendClip {
     uint32_t clip;
     std::vector<uint32_t> texts;
     std::string label;
+    Buttons buttons;
 };
 
 // game thread: the legends on screen this tick, and whether their pictures are hidden
@@ -140,7 +148,6 @@ struct LegendState {
     size_t visits = 0;
 };
 LegendState g_legends;
-std::map<uint32_t, float> g_moved;  // legend texts moved into their hidden picture's room, by their place before
 
 // a legend text moved along its row: where it sat and where it was last put; the texts are moved, not the legend,
 // because the menus' timelines place their legends again each frame
@@ -149,6 +156,8 @@ struct Placed {
     float written;
 };
 std::map<uint32_t, Placed> g_placed;
+std::map<uint32_t, Placed> g_moved;  // legend texts moved into their hidden picture's room
+std::set<uint32_t> g_dropped;  // Return legends hidden beside a Back legend, both read as the pause key
 std::map<std::string, float> g_label_share;  // a legend text's drawn width over its field's, by its own text
 bool g_measuring = false;
 
@@ -254,11 +263,18 @@ const Legend* LegendOf(uint32_t clip) {
     uint32_t character = Character(clip);
     if (!character) return nullptr;
     std::vector<uint32_t> places = FirstPlaces(character);
-    if (places.size() != std::size(kLegends[0].places)) return nullptr;
     for (const Legend& legend : kLegends) {
-        if (std::equal(places.begin(), places.end(), std::begin(legend.places))) return &legend;
+        auto end = std::find(legend.places.begin(), legend.places.end(), 0u);
+        bool same = places.size() == size_t(end - legend.places.begin());
+        if (same && std::equal(places.begin(), places.end(), legend.places.begin())) return &legend;
     }
     return nullptr;
+}
+
+// a legend has a text: other sprites place the same characters, a picture and a shape
+bool HasText(uint32_t clip) {
+    std::vector<uint32_t> children = Children(clip);
+    return std::any_of(children.begin(), children.end(), [](uint32_t child) { return EditTextField(child) != 0; });
 }
 
 std::string ShownText(uint32_t field) {
@@ -289,18 +305,28 @@ Span SpanOf(X86Context& ctx, uint32_t clip) {
 
 float LeftOf(X86Context& ctx, uint32_t clip) { return SpanOf(ctx, clip).left; }
 
+// where the text was moved to, or moved and then shifted along its row; a text made at a freed one's address is not
+bool StillMoved(uint32_t text, const Placed& moved, float x) {
+    if (x == moved.written) return true;
+    auto placed = g_placed.find(text);
+    return placed != g_placed.end() && placed->second.base == moved.written && x == placed->second.written;
+}
+
 // a text after the picture takes the picture's room while it is hidden, so the longer label keeps clear of the next
 void UpdateTextPlace(X86Context& ctx, uint32_t text, uint32_t picture, bool keyboard) {
     float& x = G<float>(text + kMatrixTx);
     auto moved = g_moved.find(text);
+    bool ours = moved != g_moved.end() && StillMoved(text, moved->second, x);
     if (!keyboard) {
-        if (moved != g_moved.end()) x = moved->second;
+        if (ours) x = moved->second.base;
+        if (moved != g_moved.end()) g_moved.erase(moved);
         return;
     }
-    if (moved != g_moved.end() || !picture) return;
+    if (ours || !picture) return;
+    if (moved != g_moved.end()) g_moved.erase(moved);
     float room = LeftOf(ctx, text) - LeftOf(ctx, picture);
     if (room <= 0.0f) return;
-    g_moved[text] = x;
+    g_moved[text] = {x, x - room};
     x -= room;
 }
 
@@ -318,8 +344,14 @@ void KeepPadLegend(X86Context& ctx, uint32_t clip, uint32_t picture) {
     }
 }
 
+// a Return legend hidden last tick comes back; DropReturnLegends hides it again while a Back legend is beside it
+void RestoreDropped(uint32_t clip) {
+    if (g_dropped.erase(clip)) SetShown(clip, true);
+}
+
 // the picture goes while the keys are shown, the texts are kept to be relabelled as they are drawn
 void ApplyLegend(X86Context& ctx, uint32_t clip, const Legend& legend, bool keyboard) {
+    RestoreDropped(clip);
     std::vector<uint32_t> children = Children(clip);
     uint32_t picture = 0;
     for (uint32_t child : children) {
@@ -332,10 +364,10 @@ void ApplyLegend(X86Context& ctx, uint32_t clip, const Legend& legend, bool keyb
         if (!field) continue;
         UpdateTextPlace(ctx, child, picture, keyboard);
         if (g_legends.clips.empty() || g_legends.clips.back().clip != clip) {
-            g_legends.clips.push_back({clip, {}, ShownText(field)});
+            g_legends.clips.push_back({clip, {}, ShownText(field), legend.buttons});
         }
         g_legends.clips.back().texts.push_back(child);
-        if (keyboard) g_legends.texts.push_back({ShownText(field), legend.buttons});
+        if (keyboard) g_legends.texts.push_back({ShownText(field), legend.buttons, legend.play});
     }
 }
 
@@ -728,9 +760,33 @@ void DrawCaseKey(X86Context& ctx, uint32_t manager, const CaseKey& key) {
 
 void Visit(X86Context& ctx, uint32_t clip, int depth, bool keyboard) {
     if (++g_legends.visits > kMaxVisits) return;
-    if (const Legend* legend = LegendOf(clip)) return ApplyLegend(ctx, clip, *legend, keyboard);
+    const Legend* legend = LegendOf(clip);
+    if (legend && HasText(clip)) return ApplyLegend(ctx, clip, *legend, keyboard);
     if (depth >= kMaxTreeDepth) return;
     for (uint32_t child : Children(clip)) Visit(ctx, child, depth + 1, keyboard);
+}
+
+bool Leads(const LegendClip& legend, int button) { return legend.buttons.first == button; }
+
+// the pause page's Return is the controller's START: on the keyboard it reads as the pause key, as Back does
+void DropReturnLegends() {
+    auto& clips = g_legends.clips;
+    bool back = std::any_of(clips.begin(), clips.end(), [](const LegendClip& legend) { return Leads(legend, kB); });
+    if (!back) return;
+    auto dropped = [](const LegendClip& legend) { return Leads(legend, kStart) && Shown(legend.clip); };
+    for (const LegendClip& legend : clips) {
+        if (!dropped(legend)) continue;
+        SetShown(legend.clip, false);
+        g_dropped.insert(legend.clip);
+    }
+    clips.erase(std::remove_if(clips.begin(), clips.end(), dropped), clips.end());
+}
+
+// a moved text no legend shows any more is forgotten, its address may be given to a new one
+void ForgetMoved() {
+    std::set<uint32_t> shown;
+    for (const LegendClip& legend : g_legends.clips) shown.insert(legend.texts.begin(), legend.texts.end());
+    std::erase_if(g_moved, [&](const auto& moved) { return !shown.count(moved.first); });
 }
 
 void UpdateLegends(X86Context& ctx) {
@@ -740,6 +796,9 @@ void UpdateLegends(X86Context& ctx) {
     if (!keyboard && !g_legends.hidden) return;
     g_legends.visits = 0;
     for (uint32_t level : Levels()) Visit(ctx, level, 0, keyboard);
+    g_dropped.clear();  // what was not visited again is gone
+    ForgetMoved();
+    if (keyboard) DropReturnLegends();
     UpdatePlaced(keyboard);
     if (keyboard) LayOutLegends(ctx);
     if (!keyboard) g_moved.clear();
@@ -751,7 +810,7 @@ void UpdateLegends(X86Context& ctx) {
 bool LeadWithKey(std::string& text) {
     for (const LegendText& legend : g_legends.texts) {
         if (legend.text != text) continue;
-        std::string label = Label(legend.buttons, true);
+        std::string label = Label(legend.buttons, !legend.play || input::CursorShown());
         if (label.empty()) return false;
         text = label + " " + text;
         return true;
