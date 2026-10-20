@@ -60,6 +60,9 @@ constexpr Answer kAnswers[] = {
     {0x600284C2, Section::Car, {"car_cycle_weapon"}},  // cycleweapon
     {0x42D8C8B3, Section::Car, {"car_tire_slasher"}},  // usegadget
     {0x811C91EB, Section::Car, {"car_exit"}},          // exit_vehicle
+    // the factory's vehicle drives under basic_player, on the right stick's gas and brake, or these actions
+    {0x72D75DDD, Section::Foot, {"car_accelerate"}},  // accelerate
+    {0xE8B44E0B, Section::Foot, {"car_brake"}},       // brake
     // jetpackplayer
     {0x2FC31762, Section::Jetpack, {"fly_up"}},    // thrust_up
     {0xEAEEB7E9, Section::Jetpack, {"fly_down"}},  // thrust_down
