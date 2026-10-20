@@ -1,6 +1,6 @@
 // Skip pop ups. TIPS: the tutorial, attache case, schematic and key boxes that pause the game are never shown, a
 // pickup still plays the box's sound. OBJECTIVES: the objective messages, their flare and sound are skipped; the
-// messages still queue and time out unseen. ALL: both.
+// messages still queue and time out unseen. Bond moments (score objectives) are always shown. ALL: both.
 #include <algorithm>
 #include <set>
 #include <string>
@@ -20,11 +20,17 @@ bool Skips(uint32_t bit) { return (game::Opt().skip_popups & bit) != 0; }
 
 constexpr int kShowArgs = 3;      // header, text, continue prompt; ret 0xC
 constexpr int kCueArgs = 2;       // player, kind; ret 8
-constexpr int kScoreCueArgs = 1;  // player; ret 4
 
 // HUD message as the player's message queue sends it: shown flag, text, alpha
 constexpr uint32_t kMessageShown = 0x00;
 constexpr uint32_t kMessageText = 0x04;
+
+// The objective classes queue their message through 0x1C6470: SimpleObjective "{s} --- {o}" and RatioObjective from
+// 0xF3AA0 and 0xF3EE0, ScoreObjective (Bond moments) "{o} --- {s}" from 0xF4290, the one call that returns here
+constexpr uint32_t kScoreObjectiveReturn = 0xF4553;
+
+// cue kind 0xE59A0 takes: the simple and ratio objectives send 2, a score objective 1 succeeded or 3 failed
+constexpr uint32_t kObjectiveCue = 2;
 
 std::set<std::string> g_objective_texts;
 bool g_stat_cue = false;  // the cue comes from a stat counter's star, not an objective
@@ -88,7 +94,8 @@ X86_FUNC(sub_0001947B) {
 X86_EXTERN_FUNC(__imp__sub_00021D97);
 X86_FUNC(sub_00021D97) {
     uint32_t text_string = R32(ctx.esp + 4);
-    g_objective_texts.insert(GuestText(R32(text_string)));
+    bool bond_moment = R32(ctx.esp) == kScoreObjectiveReturn;
+    if (!bond_moment) g_objective_texts.insert(GuestText(R32(text_string)));
     __imp__sub_00021D97(ctx, base);
 }
 
@@ -103,10 +110,11 @@ X86_FUNC(sub_00021D65) {
 }
 
 // The objective flare and sound: the HUD starts the effect in front of the camera and the sound together, for the
-// message callback (0xE59A0, thiscall: player, kind) and the score objectives' complete and fail (0xE5A30, 0xE5AD0)
+// message callback (0xE59A0, thiscall: player, kind)
 X86_EXTERN_FUNC(__imp__sub_0001802B);
 X86_FUNC(sub_0001802B) {
-    if (Skips(kSkipObjectives) && !g_stat_cue) {
+    bool objective = R32(ctx.esp + 8) == kObjectiveCue;
+    if (Skips(kSkipObjectives) && objective && !g_stat_cue) {
         Return(ctx, 0, kCueArgs);
         return;
     }
@@ -119,22 +127,4 @@ X86_FUNC(sub_00017F81) {
     g_stat_cue = true;
     __imp__sub_00017F81(ctx, base);
     g_stat_cue = false;
-}
-
-X86_EXTERN_FUNC(__imp__sub_00015FC4);
-X86_FUNC(sub_00015FC4) {
-    if (Skips(kSkipObjectives)) {
-        Return(ctx, 0, kScoreCueArgs);
-        return;
-    }
-    __imp__sub_00015FC4(ctx, base);
-}
-
-X86_EXTERN_FUNC(__imp__sub_0001D0DA);
-X86_FUNC(sub_0001D0DA) {
-    if (Skips(kSkipObjectives)) {
-        Return(ctx, 0, kScoreCueArgs);
-        return;
-    }
-    __imp__sub_0001D0DA(ctx, base);
 }
