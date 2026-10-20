@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <chrono>
@@ -50,6 +51,7 @@ constexpr uint32_t kSpeechFinished = 1;
 // music: a cutscene's piece runs on the sound clock, which keeps real time, so a skip leaves it playing
 constexpr uint32_t kMusicPlayer = 0x837EE4;
 constexpr uint32_t kStopMusic = 0x41FBE0;  // thiscall(player, channel)
+constexpr uint32_t kPlayMusic = 0x420110;  // cdecl(event name)
 constexpr uint32_t kMusicChannel = 0;
 constexpr auto kMusicLead = std::chrono::seconds(2);  // a cutscene's music event comes just before it begins
 
@@ -58,6 +60,8 @@ constexpr uint32_t kFader = 0x77F720;
 constexpr uint32_t kLetterboxShown = 0x14;  // byte
 constexpr uint32_t kLetterboxLeaving = 0x18;
 constexpr uint32_t kLetterboxSeconds = 0x1C;
+constexpr uint32_t kLetterboxElapsed = 0x2C;
+constexpr float kLetterboxBar = 0.125f;  // each bar's share of the screen height once in, 0x6CE0B4
 constexpr uint32_t kFadeShown = 0x34;  // byte
 constexpr uint32_t kFadeLeaving = 0x38;
 constexpr uint32_t kFadeDone = 0x48;  // byte
@@ -80,6 +84,7 @@ int g_frames_without_tick = 0;
 using Time = std::chrono::steady_clock::time_point;
 Time g_cutscene_began;
 Time g_music_sent;
+uint32_t g_level_music = 0;  // event name the level sent once the skipped cutscene ended
 bool g_was_playing = false;
 std::atomic<bool> g_pressed{false};
 std::atomic<bool> g_held[kPorts] = {};
@@ -169,14 +174,19 @@ void ApplyFastForward(bool on) {
     audio::SetMuted(on);
 }
 
-// the piece would have ended with the cutscene
+// the piece would have ended with the cutscene; the level's next music only follows once a piece is over,
+// so it is sent again after the stop
 void StopCutsceneMusic(X86Context& ctx) {
     uint32_t player = R32(kMusicPlayer);
+    uint32_t level_music = g_level_music;
+    g_level_music = 0;
     bool cutscene_music = g_music_sent >= g_cutscene_began - kMusicLead;
     if (!cutscene_music || !player) return;
     g_music_sent = {};
     ctx.ecx = player;
     CallGuest(ctx, kStopMusic, {kMusicChannel});
+    if (level_music) CallGuest(ctx, kPlayMusic, {level_music});
+    g_level_music = 0;
 }
 
 void Finish(X86Context& ctx) {
@@ -214,6 +224,17 @@ void UpdateSkip(X86Context& ctx) {
             }
             break;
     }
+}
+
+// how far the top bar is from fully in, as a share of the screen height: it slides in over its seconds and out
+// again (0x35D460). No letterbox leaves the prompt where it is
+float LetterboxRise() {
+    uint32_t fader = R32(kFader);
+    if (!fader || !G<uint8_t>(fader + kLetterboxShown)) return 0;
+    float seconds = G<float>(fader + kLetterboxSeconds);
+    float done = seconds > 0 ? std::min(G<float>(fader + kLetterboxElapsed) / seconds, 1.0f) : 1.0f;
+    float shown = R32(fader + kLetterboxLeaving) ? 1 - done : done;
+    return (1 - shown) * kLetterboxBar;
 }
 
 std::string PromptText() {
@@ -254,14 +275,16 @@ void DrawSkipPrompt(X86Context& ctx, uint8_t*) {
     g_was_playing = playing;
     bool skipping = g_skip != Skip::Idle;
     if (skipping && ++g_frames_without_tick > kTicklessFrames) Finish(ctx);
-    if (g_skip == Skip::Idle && Offered()) DrawCornerText(ctx, PromptText(), Corner::TopRight);
+    if (g_skip == Skip::Idle && Offered()) DrawCornerText(ctx, PromptText(), Corner::TopRight, -LetterboxRise());
 }
 
 // play a music event by name, cdecl(name): MusicEvent messages and the level's music state 0x1B64D0.
-// One sent after the skipped cutscene ended is the level's music again and is left playing.
+// One sent after the skipped cutscene ended is the level's music again.
 X86_EXTERN_FUNC(__imp__sub_00420110);
 X86_FUNC(sub_00420110) {
+    uint32_t name = R32(ctx.esp + 4);
     bool after_cutscene = g_skip == Skip::FastForward && !Playing();
-    if (R32(ctx.esp + 4)) g_music_sent = after_cutscene ? Time{} : std::chrono::steady_clock::now();
+    if (name && after_cutscene) g_level_music = name;
+    if (name && !after_cutscene) g_music_sent = std::chrono::steady_clock::now();
     __imp__sub_00420110(ctx, base);
 }
