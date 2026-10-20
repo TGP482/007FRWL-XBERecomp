@@ -3219,11 +3219,26 @@ constexpr uint32_t kQuadCorners = 4;
 constexpr float kScreenWidth = 640;
 constexpr float kScreenHeight = 480;
 
+// the mask reads 0..1; the glow and flash passes over the screen read render targets in pixels
+bool UnitCoordinates(const Assembled& a, int reg) {
+    const VertexElement& e = a.elements[size_t(reg)];
+    const VertexBuffer& vb = a.buffers[e.buffer];
+    if (FloatCount(e.format) < 2 || !vb.src || !vb.stride) return false;
+    if (uint64_t(a.vertex_count) * vb.stride > vb.bytes) return false;
+    for (uint32_t v = 0; v < a.vertex_count; v++) {
+        float uv[2];
+        std::memcpy(uv, vb.src + size_t(v) * vb.stride + e.offset, sizeof(uv));
+        bool unit = uv[0] >= 0 && uv[0] <= 1 && uv[1] >= 0 && uv[1] <= 1;
+        if (!unit) return false;
+    }
+    return true;
+}
+
 bool IsScopeMask(const State& s, const Assembled& a) {
     if (!game::Wide() || !s.textures[0]) return false;
     if (!a.vertices.empty() || a.vertex_count != kQuadCorners) return false;
     bool mask_texcoords = (a.regs >> kMaskTexcoordReg & 1) && !(a.regs >> kIm2DTexcoordReg & 1);
-    if (!mask_texcoords || !FloatCount(a.elements[kMaskTexcoordReg].format)) return false;
+    if (!mask_texcoords || !UnitCoordinates(a, kMaskTexcoordReg)) return false;
     const VertexElement& e = a.elements[kPositionReg];
     const VertexBuffer& vb = a.buffers[e.buffer];
     if (FloatCount(e.format) < 2 || !vb.src || !vb.stride) return false;
