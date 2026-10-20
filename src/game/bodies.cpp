@@ -40,6 +40,9 @@ constexpr int kHeldItemCount = 2;
 // dropped item: its life, and the time it starts to fade
 constexpr uint32_t kItemLife = 0x230;
 constexpr uint32_t kItemFadeAt = 0x234;
+// an unset fade time lets the item leave the physics world once it rests (0xA71E0), which a riot shield's
+// destructor 0xA7FA0 does not expect: it read the freed body at level unload
+constexpr uint32_t kNeverFade = 0xFFFFFFFF;
 
 // an actor as it was when kept; a deleted one is forgotten by its destructor
 struct Kept {
@@ -109,9 +112,11 @@ bool KeepCorpse(X86Context& ctx, uint8_t*) {
     return true;
 }
 
-// item dropped (0xA6CE0), esi the item: true leaves its fade timer unset, a minute then a two second fade and delete
+// item dropped (0xA6CE0), esi the item: true keeps its fade timer from ever running out, instead of a minute then a
+// two second fade and delete
 bool KeepDroppedItem(X86Context& ctx, uint8_t*) {
     if (!game::Opt().persistent_bodies) return false;
+    W32(ctx.esi + kItemFadeAt, kNeverFade);
     g_items.push_back(Keep(ctx.esi));
     if (g_items.size() > kKeptItems) {
         FadeItem(g_items.front());
