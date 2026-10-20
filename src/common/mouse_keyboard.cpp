@@ -119,7 +119,7 @@ constexpr Entry kEntries[] = {
     {{"car_fire", "FIRE WEAPON", "LMB"}, Kind::Game, kRightTrigger, Section::Car},
     {{"car_target_lock", "TARGET LOCK", "RMB"}, Kind::Game, kLeftTrigger, Section::Car},
     {{"car_cycle_weapon", "CYCLE WEAPON", "Q,Wheel Up"}, Kind::Game, kWhite, Section::Car},
-    {{"car_tire_slasher", "TIRE SLASHER", "E"}, Kind::Game, -1, Section::Car},  // Y prompts name the exit
+    {{"car_tire_slasher", "TIRE SLASHER", "E"}, Kind::Game, -1, Section::Car}, 
     {{"car_exit", "EXIT VEHICLE", "F"}, Kind::Game, kY, Section::Car},
     {{"fly_forward", "FLY FORWARD", "W"}, Kind::Move, kForward, Section::Jetpack},
     {{"fly_back", "FLY BACK", "S"}, Kind::Move, kBackward, Section::Jetpack},
