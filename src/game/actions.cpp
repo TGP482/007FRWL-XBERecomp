@@ -13,6 +13,9 @@
 
 using namespace kernel;
 
+void UpdateAmmoSwap(X86Context& ctx, bool pressed);  // ammo.cpp
+bool ReloadForced(uint32_t port, uint32_t hash);     // ammo.cpp
+
 namespace {
 
 using input::Section;
@@ -35,6 +38,8 @@ constexpr Answer kAnswers[] = {
     {0xA2D67105, Section::Foot, {"interact"}},   // enter_vehicle
     {0x83EEAB39, Section::Foot, {"reload"}},     // reload
     {0xCBC9B2A3, Section::Foot, {"inventory"}},  // itemselect_activate
+    {0x3AF81AAA, Section::Foot, {"target_left"}},   // switch_target_left, a flick of the right stick
+    {0xEFD019D9, Section::Foot, {"target_right"}},  // switch_target_right
     // item_select_hud
     {0x9D72D5CB, Section::Inventory, {"inventory_up"}},      // itemselect_up
     {0x3453D1D2, Section::Inventory, {"inventory_down"}},    // itemselect_down
@@ -168,6 +173,12 @@ std::optional<bool> KeyAnswer(uint32_t port, uint32_t hash, uint32_t mode) {
     return (keys & KeyMask(*answer)) != 0;
 }
 
+bool KeyPressed(const char* id) {
+    int index = input::ActionIndex(id);
+    uint64_t pressed = g_keys.now & ~g_keys.before;
+    return index >= 0 && (pressed >> index & 1);
+}
+
 }  // namespace
 
 // the input manager's update, once a frame whether paused or running, before it matches the ports' actions
@@ -178,6 +189,8 @@ X86_FUNC(sub_0034FEB0) {
     g_section = SectionOf(input::KeyboardPort());
     LatchInventory();
     input::SetSection(g_section);
+    bool on_foot = input::KeyboardActive() && g_section == Section::Foot;
+    UpdateAmmoSwap(ctx, on_foot && KeyPressed("switch_ammo"));
     __imp__sub_0034FEB0(ctx, base);
 }
 
@@ -188,6 +201,7 @@ X86_FUNC(sub_0034DDE0) {
     uint32_t hash = R32(ctx.esp + 8);
     uint32_t mode = R32(ctx.esp + 12);
     std::optional<bool> keys = IdleAnswer(port, hash, mode);
+    if (!keys && ReloadForced(port, hash)) keys = true;
     if (!keys) keys = KeyAnswer(port, hash, mode);
     if (!keys) return __imp__sub_0034DDE0(ctx, base);
     Return(ctx, *keys ? 1 : 0, 3);
