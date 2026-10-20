@@ -36,7 +36,22 @@ constexpr uint32_t kSlotCamera = 0x08;  // set by the camera track opcode 0x300:
 constexpr uint32_t kSlotHeld = 0x10;    // left alone by the engine's own skip check 0x40BB90
 constexpr uint32_t kSlotInstance = 0xE8;  // the sequence instance + 0x20
 constexpr uint32_t kInstanceLink = 0x20;
-constexpr uint32_t kStopDialogue = 0x404BD0;  // fastcall(instance), its audio stream stops
+
+// sequence instance speech: the instance ends only once its speech is done (0x405530)
+constexpr uint32_t kSpeechFlags = 0xE4;
+constexpr uint32_t kSpeechHandle = 0x10C;
+constexpr int kSpeechStateShift = 7;
+constexpr uint32_t kSpeechStateMask = 0xF;
+constexpr uint32_t kSpeechPlaying = 2;
+constexpr uint32_t kStopSpeech = 0x38F690;   // cdecl(handle)
+constexpr uint32_t kSpeechEnded = 0x405210;  // cdecl(cookie, event, instance), the stream's end callback
+constexpr uint32_t kSpeechFinished = 1;
+
+// music: a cutscene's piece runs on the sound clock, which keeps real time, so a skip leaves it playing
+constexpr uint32_t kMusicPlayer = 0x837EE4;
+constexpr uint32_t kStopMusic = 0x41FBE0;  // thiscall(player, channel)
+constexpr uint32_t kMusicChannel = 0;
+constexpr auto kMusicLead = std::chrono::seconds(2);  // a cutscene's music event comes just before it begins
 
 // screen fader [0x77F720]: layer 0 at +0x10 is the letterbox, layer 1 at +0x30 the colour fade
 constexpr uint32_t kFader = 0x77F720;
@@ -62,6 +77,10 @@ enum class Skip { Idle, FadingOut, FastForward };
 Skip g_skip = Skip::Idle;
 std::chrono::steady_clock::time_point g_since;
 int g_frames_without_tick = 0;
+using Time = std::chrono::steady_clock::time_point;
+Time g_cutscene_began;
+Time g_music_sent;
+bool g_was_playing = false;
 std::atomic<bool> g_pressed{false};
 std::atomic<bool> g_held[kPorts] = {};
 
@@ -109,17 +128,29 @@ bool CutsceneSlot(uint32_t slot) {
     return (flags & kSlotRunning) && (flags & kSlotCamera) && !(flags & kSlotHeld);
 }
 
-void StopDialogue(X86Context& ctx, uint32_t slot) {
-    uint32_t link = R32(slot + kSlotInstance);
-    if (link <= kInstanceLink) return;
-    ctx.ecx = link - kInstanceLink;
-    CallGuest(ctx, kStopDialogue, {});
+uint32_t SpeechState(uint32_t instance) {
+    return (R32(instance + kSpeechFlags) >> kSpeechStateShift) & kSpeechStateMask;
 }
 
-void StopCutsceneDialogue(X86Context& ctx) {
+// ends the speech as its stream running out would; the game's own stop 0x404BD0 queues it again,
+// and a queued speech holds the instance open so its follow on sequence never starts
+void FinishSpeech(X86Context& ctx, uint32_t slot) {
+    uint32_t link = R32(slot + kSlotInstance);
+    if (link <= kInstanceLink) return;
+    uint32_t instance = link - kInstanceLink;
+    uint32_t handle = R32(instance + kSpeechHandle);
+    if (!handle) return;
+    CallGuest(ctx, kStopSpeech, {handle});
+    W32(instance + kSpeechHandle, 0);
+    // a speech handed over from a chained instance is not tracked by this one's state
+    bool waiting = SpeechState(instance) == kSpeechPlaying;
+    if (waiting) CallGuest(ctx, kSpeechEnded, {0, kSpeechFinished, instance});
+}
+
+void FinishCutsceneSpeech(X86Context& ctx) {
     for (uint32_t i = 0; i < kSlotCount; i++) {
         uint32_t slot = kSlots + i * kSlotSize;
-        if (CutsceneSlot(slot)) StopDialogue(ctx, slot);
+        if (CutsceneSlot(slot)) FinishSpeech(ctx, slot);
     }
 }
 
@@ -138,7 +169,18 @@ void ApplyFastForward(bool on) {
     audio::SetMuted(on);
 }
 
+// the piece would have ended with the cutscene
+void StopCutsceneMusic(X86Context& ctx) {
+    uint32_t player = R32(kMusicPlayer);
+    bool cutscene_music = g_music_sent >= g_cutscene_began - kMusicLead;
+    if (!cutscene_music || !player) return;
+    g_music_sent = {};
+    ctx.ecx = player;
+    CallGuest(ctx, kStopMusic, {kMusicChannel});
+}
+
 void Finish(X86Context& ctx) {
+    StopCutsceneMusic(ctx);
     ApplyFastForward(false);
     FadeBack(ctx);
     g_skip = Skip::Idle;
@@ -168,7 +210,7 @@ void UpdateSkip(X86Context& ctx) {
             if (!Playing() || waited >= kFastForwardTimeout) {
                 Finish(ctx);
             } else {
-                StopCutsceneDialogue(ctx);
+                FinishCutsceneSpeech(ctx);
             }
             break;
     }
@@ -207,7 +249,19 @@ X86_FUNC(sub_004047F0) {
 
 // end of the frame render, over the finished frame
 void DrawSkipPrompt(X86Context& ctx, uint8_t*) {
+    bool playing = Playing();
+    if (playing && !g_was_playing) g_cutscene_began = std::chrono::steady_clock::now();
+    g_was_playing = playing;
     bool skipping = g_skip != Skip::Idle;
     if (skipping && ++g_frames_without_tick > kTicklessFrames) Finish(ctx);
     if (g_skip == Skip::Idle && Offered()) DrawCornerText(ctx, PromptText(), Corner::TopRight);
+}
+
+// play a music event by name, cdecl(name): MusicEvent messages and the level's music state 0x1B64D0.
+// One sent after the skipped cutscene ended is the level's music again and is left playing.
+X86_EXTERN_FUNC(__imp__sub_00420110);
+X86_FUNC(sub_00420110) {
+    bool after_cutscene = g_skip == Skip::FastForward && !Playing();
+    if (R32(ctx.esp + 4)) g_music_sent = after_cutscene ? Time{} : std::chrono::steady_clock::now();
+    __imp__sub_00420110(ctx, base);
 }
