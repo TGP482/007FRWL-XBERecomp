@@ -433,6 +433,18 @@ std::string StepFreeAim(Settings&, int step) {
     return OnOff(on);
 }
 
+std::string StepPadCameraCentring(Settings&, int step) {
+    bool& on = game::Opt().pad_camera_centring;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
+std::string StepPadFreeAim(Settings&, int step) {
+    bool& on = game::Opt().pad_free_aim;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
 // 45 to 140 in steps of 1, 65 the game's own
 constexpr int kFovMin = 45;
 constexpr int kFovMax = 140;
@@ -549,6 +561,8 @@ enum RowId {
     kPlayer4Row,
     kSkipPopupsRow,
     kAutosaveRow,
+    kPadCameraCentringRow,
+    kPadFreeAimRow,
 };
 
 // in RowId order
@@ -585,6 +599,8 @@ constexpr StepFn kSteps[] = {
     StepPlayerPort<3>,
     StepSkipPopups,
     StepAutosave,
+    StepPadCameraCentring,
+    StepPadFreeAim,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -660,7 +676,11 @@ const std::vector<Row>& InputRows() {
 // a bind row for each controller action
 const std::vector<Row>& ControllerRows() {
     static const std::vector<Row> list = [] {
-        std::vector<Row> out = {{Kind::Heading, -1, "CONTROLLER"}};
+        std::vector<Row> out = {
+            {Kind::Heading, -1, "CONTROLLER"},
+            {Kind::Value, kPadCameraCentringRow, "CAMERA CENTRING"},
+            {Kind::Value, kPadFreeAimRow, "FREE AIM"},
+        };
         std::span<const input::Action> actions = input::PadActions();
         for (size_t i = 0; i < actions.size(); i++) out.push_back({Kind::PadBind, int(i), actions[i].label});
         return out;
@@ -1020,6 +1040,9 @@ void RestoreDefaults(int page) {
         audio::SetOutputMode(defaults.audio_output);
         RestoreSettingsDefaults();
     } else if (page == kControllerPage) {
+        const game::Options defaults;
+        game::Opt().pad_camera_centring = defaults.pad_camera_centring;
+        game::Opt().pad_free_aim = defaults.pad_free_aim;
         input::ResetPadBindings();
     } else {
         const game::Options defaults;

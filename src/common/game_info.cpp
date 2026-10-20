@@ -265,6 +265,8 @@ const app::GameInfo app::kGame = {
         {"invert_mouse", &game::Opt().invert_mouse, nullptr},
         {"camera_centring", &game::Opt().camera_centring, nullptr},
         {"free_aim", &game::Opt().free_aim, nullptr},
+        {"pad_camera_centring", &game::Opt().pad_camera_centring, nullptr},
+        {"pad_free_aim", &game::Opt().pad_free_aim, nullptr},
         {"skip_intros", &game::Opt().skip_intros, nullptr},
         {"skippable_cutscenes", &game::Opt().skippable_cutscenes, nullptr},
         {"skip_popups", nullptr, &game::Opt().skip_popups},

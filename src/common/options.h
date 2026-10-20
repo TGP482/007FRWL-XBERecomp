@@ -26,6 +26,8 @@ struct Options {
     bool invert_mouse = false;
     bool camera_centring = false;  // the chase camera swings back behind Bond on keyboard and mouse
     bool free_aim = false;  // holding aim with any gun gives the rocket launcher's over the shoulder aim
+    bool pad_camera_centring = true;  // the two above for a controller; the console centres
+    bool pad_free_aim = false;
     bool autosave = false;  // the stats screen saves; the save boxes are answered unseen
     bool persistent_bodies = false;  // dead enemies and their dropped guns and shields are never deleted
     bool inventory_pause = true;  // the game pauses while the inventory is open, as on the console

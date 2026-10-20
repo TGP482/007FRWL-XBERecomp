@@ -126,8 +126,15 @@ bool IsGun(X86Context& ctx, uint32_t item) {
 
 bool CutscenePlaying() { return G<uint8_t>(kCutscenePlaying) != 0; }
 
+// the keyboard's port with it used last takes the mouse setting, a controller its own
+bool FreeAimOn(uint32_t player) {
+    if (!player || R32(player) != kPlayerVtable) return false;
+    bool mouse = KeyboardPlayer(player) && input::KeyboardActive();
+    return mouse ? game::Opt().free_aim : game::Opt().pad_free_aim;
+}
+
 bool FreeAimGun(X86Context& ctx, uint32_t player, uint32_t gun) {
-    if (!game::Opt().free_aim || !gun || CutscenePlaying() || !KeyboardPlayer(player)) return false;
+    if (!gun || CutscenePlaying() || !FreeAimOn(player)) return false;
     return !(R32(gun + kGunFlags) & kGunAimsAsThrown) && IsGun(ctx, gun);
 }
 
@@ -145,7 +152,7 @@ uint32_t LendFocusLock(uint32_t message) {
     uint32_t link = R32(message + kMessageShooter);
     if (!link || link == kLinkOffset) return 0;
     uint32_t player = link - kLinkOffset;
-    if (!KeyboardPlayer(player) || !InFreeAim(player)) return 0;
+    if (!InFreeAim(player)) return 0;
     uint32_t flags = R32(player + kPlayerAimFlags);
     if (flags & kAimFlagFocusLock) return 0;
     W32(player + kPlayerAimFlags, flags | kAimFlagFocusLock);

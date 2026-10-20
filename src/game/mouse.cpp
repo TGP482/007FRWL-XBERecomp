@@ -186,17 +186,22 @@ void ChaseMouseTake(X86Context& ctx, uint8_t*) {
     if (R32(ctx.esi + kChaseStickEnabled) == 0) g_chase = {};
 }
 
-// no stick input this update, so the camera may swing back behind Bond; true keeps it where the mouse left it
-bool ChaseHoldsCentring(X86Context& ctx, uint8_t*) {
-    if (!input::KeyboardActive() || !OnKeyboardPort(R32(ctx.esi + kChasePlayer))) return false;
-    return !game::Opt().camera_centring || Moved(g_chase);
+// the keyboard's port with it used last takes the mouse setting, a controller its own
+static bool OnMouse(uint32_t player) { return input::KeyboardActive() && OnKeyboardPort(player); }
+
+static bool CentringOn(uint32_t player) {
+    return OnMouse(player) ? game::Opt().camera_centring : game::Opt().pad_camera_centring;
 }
 
-// on keyboard and mouse with centring off the camera keeps its direction while Bond moves
-static bool HoldsDirection(uint32_t camera) {
-    if (game::Opt().camera_centring) return false;
-    return input::KeyboardActive() && OnKeyboardPort(R32(camera + kChasePlayer));
+// no stick input this update, so the camera may swing back behind Bond; true keeps it where the view was left
+bool ChaseHoldsCentring(X86Context& ctx, uint8_t*) {
+    uint32_t player = R32(ctx.esi + kChasePlayer);
+    if (!CentringOn(player)) return true;
+    return OnMouse(player) && Moved(g_chase);
 }
+
+// with centring off the camera keeps its direction while Bond moves
+static bool HoldsDirection(uint32_t camera) { return !CentringOn(R32(camera + kChasePlayer)); }
 
 // Bond moved and the view turned after him; the turn back undoes it, as the game does when focusing
 void ChaseTracking(X86Context& ctx, uint8_t*) {
