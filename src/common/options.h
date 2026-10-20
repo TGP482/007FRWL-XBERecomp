@@ -20,6 +20,7 @@ inline constexpr int kPlayers = 4;  // the console's controller ports
 struct Options {
     bool skip_intros = false;
     bool skippable_cutscenes = true;  // Start or its key ends an in game cutscene
+    uint32_t skip_popups = 0;  // 0 off, 1 the boxes that pause the game, 2 also the objective messages
     bool fps_counter = false;
     bool hdr_output = true;  // HDR10 on a display with Windows HDR on
     bool invert_mouse = false;
@@ -48,6 +49,7 @@ const char* ShownLanguage();  // language.cpp
 inline std::atomic<float> g_fps{0};  // from the host, for the game's own counter
 inline std::atomic<bool> g_hdr_display{false};  // the window's display has Windows HDR on, from the renderer
 inline std::atomic<bool> g_hide_hud{false};  // the toggle HUD key: the HUD is not drawn
+inline std::atomic<bool> g_fast_forward{false};  // a skipped cutscene plays on behind black, unpaced
 inline std::atomic<bool> g_focus_paused{false};  // the game thread waits for the window's focus
 void WaitWhileUnfocused();  // focus_pause.cpp: game thread, before the present
 uint32_t FocusPausedMs();  // the milliseconds the game thread has waited in focus pauses so far

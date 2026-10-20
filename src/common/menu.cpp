@@ -104,6 +104,8 @@ constexpr uint32_t kDrawDistances[] = {1, 2, 4, 8};
 const char* const kDrawDistanceNames[] = {"GAME DEFAULT", "2x", "4x", "8x"};
 constexpr uint32_t kAoValues[] = {0, 1, 2};
 const char* const kAoNames[] = {"OFF", "SSAO", "GTAO"};
+constexpr uint32_t kSkipPopups[] = {0, 1, 2};
+const char* const kSkipPopupNames[] = {"OFF", "POP UPS", "ALL"};
 constexpr uint32_t kFmvScales[] = {0, 1};
 const char* const kFmvScaleNames[] = {"FILL", "4:3"};
 constexpr uint32_t kAudioOutputs[] = {audio::kOutputAuto, audio::kOutputMono, audio::kOutputStereo,
@@ -368,6 +370,10 @@ std::string StepSkippableCutscenes(Settings&, int step) {
     return OnOff(on);
 }
 
+std::string StepSkipPopups(Settings&, int step) {
+    return kSkipPopupNames[StepTable(kSkipPopups, game::Opt().skip_popups, step)];
+}
+
 std::string StepPersistentBodies(Settings&, int step) {
     bool& on = game::Opt().persistent_bodies;
     if (step) on = !on;
@@ -535,6 +541,7 @@ enum RowId {
     kPlayer2Row,
     kPlayer3Row,
     kPlayer4Row,
+    kSkipPopupsRow,
 };
 
 // in RowId order
@@ -569,6 +576,7 @@ constexpr StepFn kSteps[] = {
     StepPlayerPort<1>,
     StepPlayerPort<2>,
     StepPlayerPort<3>,
+    StepSkipPopups,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -600,6 +608,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Heading, -1, "GENERAL"},
     {Kind::Value, kSkipIntrosRow, "SKIP INTROS"},
     {Kind::Value, kSkippableCutscenesRow, "SKIPPABLE CUTSCENES"},
+    {Kind::Value, kSkipPopupsRow, "SKIP POP UPS"},
     {Kind::Value, kPersistentBodiesRow, "PERSISTENT BODIES"},
     {Kind::Value, kInventoryPauseRow, "INVENTORY PAUSE"},
     {Kind::Value, kPauseOnFocusLossRow, "PAUSE ON FOCUS LOSS"},
@@ -983,6 +992,7 @@ void RestoreDefaults(int page) {
         const game::Options defaults;
         game::Opt().skip_intros = defaults.skip_intros;
         game::Opt().skippable_cutscenes = defaults.skippable_cutscenes;
+        game::Opt().skip_popups = defaults.skip_popups;
         game::Opt().persistent_bodies = defaults.persistent_bodies;
         game::Opt().inventory_pause = defaults.inventory_pause;
         game::Opt().fps_counter = defaults.fps_counter;
@@ -1164,6 +1174,7 @@ void PaceAt(uint32_t cap) {
 }  // namespace
 
 void PaceFrame() {
+    if (game::g_fast_forward) return;
     if (Get().fps_cap != kFpsCapRefresh) {
         Pace();
         return;
