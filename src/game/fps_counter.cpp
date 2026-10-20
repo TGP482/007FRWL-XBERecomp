@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "common/options.h"
+#include "core/log.h"
 #include "game/hud.h"
 #include "xdk/hle.h"
 
@@ -76,6 +77,7 @@ constexpr CornerPlace kTopLeftPlace = {0.009f, 0.016f, 0.6f, kAlignLeft};
 constexpr CornerPlace kTopRightPlace = {0.94f, 0.07f, 0.8f, kAlignRight};
 
 // memory the text manager reads: the position, then the text
+constexpr uint32_t kScratchText = 8;
 uint32_t Scratch() {
     static const uint32_t base = mem::AllocSystem(0x40);
     return base;
@@ -89,14 +91,14 @@ struct Place {
     float y;
 };
 
-Place PagePlace(uint32_t manager, const CornerPlace& corner) {
+Place PagePlace(uint32_t manager, const CornerPlace& corner, float drop) {
     using namespace kernel;
     float width = G<float>(manager + kManagerPageWidth);
     float height = G<float>(manager + kManagerPageHeight);
     uint32_t font = R32(manager + kManagerFont);
     float glyph_scale = G<float>(manager + kManagerGlyphScale);
     float text_height = float(int32_t(R32(font + kFontHeight))) * glyph_scale * corner.scale;
-    return {corner.x * width, height * (1.0f - corner.top) - text_height};
+    return {corner.x * width, height * (1.0f - corner.top - drop) - text_height};
 }
 
 void Show(X86Context& ctx, uint32_t colour, Place place, uint32_t position, uint32_t text, const CornerPlace& corner) {
@@ -106,14 +108,15 @@ void Show(X86Context& ctx, uint32_t colour, Place place, uint32_t position, uint
     kernel::CallGuest(ctx, kDrawText, {position, Bits(corner.scale), text, corner.align});
 }
 
-// the counter's own font, whatever the game drew last; returns the font to put back
-uint32_t ApplyFont(X86Context& ctx, uint32_t manager) {
-    using namespace kernel;
-    uint32_t previous = R32(manager + kManagerFont);
-    uint32_t id = CallGuest(ctx, kFontId, {kDinSmall});
+// the counter's own font, whatever the game drew last, even none; false when it is not loaded
+bool ApplyFont(X86Context& ctx, uint32_t manager) {
+    static bool reported = true;
+    uint32_t id = kernel::CallGuest(ctx, kFontId, {kDinSmall});
     ctx.ecx = manager;
-    if (!(CallGuest(ctx, kSetFont, {id}) & 0xFF)) W32(manager + kManagerFont, previous);
-    return previous;
+    bool loaded = (kernel::CallGuest(ctx, kSetFont, {id}) & 0xFF) != 0;
+    if (loaded != reported) LOGR("corner text: din_small %s", loaded ? "loaded" : "not loaded, nothing drawn");
+    reported = loaded;
+    return loaded;
 }
 
 // the state the HUD pass draws its text in, so the counter does not depend on what else was drawn this frame
@@ -132,26 +135,12 @@ void BeginOverlay(X86Context& ctx, uint32_t manager, uint32_t camera) {
     G<float>(manager + kManagerDepth) = G<float>(kOverlayDepth);
 }
 
-}  // namespace
-
-// text over the finished frame in the HUD's own 2D state; Latin 1, as the game's text is
-void DrawCornerText(X86Context& ctx, std::string_view line, Corner corner) {
+// the line and its shadow, in the corner's place
+void ShowLine(X86Context& ctx, uint32_t manager, uint32_t text, Corner corner, float drop) {
     using namespace kernel;
-    uint32_t manager = R32(kTextManager);
-    uint32_t cam = R32(kCamera);
-    if (!manager || !cam || !R32(manager + kManagerFont)) return;
-    uint32_t position = Scratch();
-    uint32_t text = position + 8;
-    size_t length = std::min<size_t>(line.size(), kMaxChars - 1);
-    for (size_t i = 0; i < length; i++) G<char>(text + uint32_t(i)) = line[i];
-    G<char>(text + uint32_t(length)) = 0;
     const CornerPlace& place_at = corner == Corner::TopLeft ? kTopLeftPlace : kTopRightPlace;
-    uint32_t frame_ecx = ctx.ecx;
-    ctx.ecx = R32(kOverlayCameras);
-    uint32_t overlay = ctx.ecx ? CallGuest(ctx, kOverlayCamera, {cam}) : cam;
-    BeginOverlay(ctx, manager, overlay);
-    uint32_t previous_font = ApplyFont(ctx, manager);
-    Place place = PagePlace(manager, place_at);
+    uint32_t position = Scratch();
+    Place place = PagePlace(manager, place_at, drop);
     Place shadow = {place.x + kShadowX * G<float>(manager + kManagerPageWidth),
                     place.y - kShadowY * G<float>(manager + kManagerPageHeight)};
     if (corner == Corner::TopLeft) HudAnchorLeft(true);
@@ -160,6 +149,26 @@ void DrawCornerText(X86Context& ctx, std::string_view line, Corner corner) {
     Show(ctx, kBlack, shadow, position, text, place_at);
     Show(ctx, kWhite, place, position, text, place_at);
     HudAnchorLeft(false);
+}
+
+}  // namespace
+
+// text over the finished frame in the HUD's own 2D state; Latin 1, as the game's text is
+void DrawCornerText(X86Context& ctx, std::string_view line, Corner corner, float drop) {
+    using namespace kernel;
+    uint32_t manager = R32(kTextManager);
+    uint32_t cam = R32(kCamera);
+    if (!manager || !cam) return;
+    uint32_t text = Scratch() + kScratchText;
+    size_t length = std::min<size_t>(line.size(), kMaxChars - 1);
+    for (size_t i = 0; i < length; i++) G<char>(text + uint32_t(i)) = line[i];
+    G<char>(text + uint32_t(length)) = 0;
+    uint32_t frame_ecx = ctx.ecx;
+    ctx.ecx = R32(kOverlayCameras);
+    uint32_t overlay = ctx.ecx ? CallGuest(ctx, kOverlayCamera, {cam}) : cam;
+    BeginOverlay(ctx, manager, overlay);
+    uint32_t previous_font = R32(manager + kManagerFont);
+    if (ApplyFont(ctx, manager)) ShowLine(ctx, manager, text, corner, drop);
     W32(manager + kManagerFont, previous_font);
     CallGuest(ctx, kPopMatrix2d, {});
     CallGuest(ctx, kEndUpdate, {overlay});

@@ -7,6 +7,7 @@
 void HudAnchorLeft(bool on);
 void HudAnchorRight(bool on);  // the same at the screen's right; either false ends both
 
-// text over the finished frame in the game's font, called from a hook at the frame's end (fps_counter.cpp)
+// text over the finished frame in the game's font, called from a hook at the frame's end (fps_counter.cpp);
+// drop moves it down by that share of the screen height
 enum class Corner { TopLeft, TopRight };
-void DrawCornerText(X86Context& ctx, std::string_view line, Corner corner);
+void DrawCornerText(X86Context& ctx, std::string_view line, Corner corner, float drop = 0);
