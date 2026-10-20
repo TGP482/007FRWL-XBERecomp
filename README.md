@@ -9,7 +9,7 @@ This port was created using the [Xbox XBE Recomp](https://github.com/TGP482/Xbox
 ## Installation
 The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBERecomp/releases) can be found in the Releases page.
 
-- Place your game files in the `assets` folder. This can be an ISO, or the extracted data files, of the USA, Europe or Asia release.
+- Place your game files in the `assets` folder. This can be an ISO, or the extracted data files, of the USA or Europe release.
 - Run `007FRWL.exe`. The first start compiles the game's code for your PC, this only happens once.
 - Recomp Settings can be adjusted in the in-game options menu while the game is running, or through the Settings overlay, which is opened with <kbd>F10</kbd> by default.
 
