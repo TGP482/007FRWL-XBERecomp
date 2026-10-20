@@ -119,7 +119,7 @@ constexpr Entry kEntries[] = {
     {{"car_fire", "FIRE WEAPON", "LMB"}, Kind::Game, kRightTrigger, Section::Car},
     {{"car_target_lock", "TARGET LOCK", "RMB"}, Kind::Game, kLeftTrigger, Section::Car},
     {{"car_cycle_weapon", "CYCLE WEAPON", "Q,Wheel Up"}, Kind::Game, kWhite, Section::Car},
-    {{"car_tire_slasher", "TIRE SLASHER", "E"}, Kind::Game, kY, Section::Car},
+    {{"car_tire_slasher", "TIRE SLASHER", "E"}, Kind::Game, -1, Section::Car},  // Y prompts name the exit
     {{"car_exit", "EXIT VEHICLE", "F"}, Kind::Game, kY, Section::Car},
     {{"fly_forward", "FLY FORWARD", "W"}, Kind::Move, kForward, Section::Jetpack},
     {{"fly_back", "FLY BACK", "S"}, Kind::Move, kBackward, Section::Jetpack},
@@ -379,6 +379,37 @@ Binds CopyBinds() {
 
 bool AnyDown(const std::vector<int>& keys) { return std::any_of(keys.begin(), keys.end(), Down); }
 
+// keys held as the inventory closes wait for release: the click that picked an item does not then fire it
+std::mutex g_held_back_lock;
+std::vector<int> g_held_back;
+
+void HoldBackInventoryKeys() {
+    std::vector<int> held;
+    {
+        std::lock_guard lock(g_bind_lock);
+        for (size_t i = 0; i < kCount; i++) {
+            if (kEntries[i].section != Section::Inventory) continue;
+            for (int vk : g_binds[i]) {
+                if (Down(vk)) held.push_back(vk);
+            }
+        }
+    }
+    std::lock_guard lock(g_held_back_lock);
+    g_held_back = held;
+}
+
+// a released key is let go of
+bool HeldBack(int vk) {
+    std::lock_guard lock(g_held_back_lock);
+    auto found = std::find(g_held_back.begin(), g_held_back.end(), vk);
+    if (found == g_held_back.end()) return false;
+    if (Down(vk)) return true;
+    g_held_back.erase(found);
+    return false;
+}
+
+bool PlayDown(int vk) { return Down(vk) && !HeldBack(vk); }
+
 const char* SectionHeading(Section section) {
     switch (section) {
         case Section::Inventory:
@@ -497,7 +528,7 @@ bool GameDown(int vk, bool play) {
     if (g_menu && vk == VK_DELETE) return false;
     if (!play && IsWheel(vk)) return false;
     if (!play && g_menu && IsMouseButton(vk)) return false;
-    return Down(vk);
+    return PlayDown(vk);
 }
 
 bool AnyGameDown(const std::vector<int>& keys, bool play) {
@@ -768,7 +799,10 @@ std::string ButtonKey(int button) {
     return {};
 }
 
-void SetSection(Section section) { g_section = section; }
+void SetSection(Section section) {
+    Section before = g_section.exchange(section);
+    if (before == Section::Inventory && section != Section::Inventory) HoldBackInventoryKeys();
+}
 
 std::span<const Action> Actions() {
     static const std::array<Action, kCount> list = [] {
@@ -855,7 +889,7 @@ uint64_t HeldActions() {
     Binds binds = CopyBinds();
     uint64_t held = 0;
     for (size_t i = 0; i < kCount; i++) {
-        if (AnyDown(binds[i])) held |= uint64_t(1) << i;
+        if (std::any_of(binds[i].begin(), binds[i].end(), PlayDown)) held |= uint64_t(1) << i;
     }
     return held;
 }
