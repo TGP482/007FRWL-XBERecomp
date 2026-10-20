@@ -374,6 +374,12 @@ std::string StepSkipPopups(Settings&, int step) {
     return kSkipPopupNames[StepTable(kSkipPopups, game::Opt().skip_popups, step)];
 }
 
+std::string StepAutosave(Settings&, int step) {
+    bool& on = game::Opt().autosave;
+    if (step) on = !on;
+    return OnOff(on);
+}
+
 std::string StepPersistentBodies(Settings&, int step) {
     bool& on = game::Opt().persistent_bodies;
     if (step) on = !on;
@@ -542,6 +548,7 @@ enum RowId {
     kPlayer3Row,
     kPlayer4Row,
     kSkipPopupsRow,
+    kAutosaveRow,
 };
 
 // in RowId order
@@ -577,6 +584,7 @@ constexpr StepFn kSteps[] = {
     StepPlayerPort<2>,
     StepPlayerPort<3>,
     StepSkipPopups,
+    StepAutosave,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -609,6 +617,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kSkipIntrosRow, "SKIP INTROS"},
     {Kind::Value, kSkippableCutscenesRow, "SKIPPABLE CUTSCENES"},
     {Kind::Value, kSkipPopupsRow, "SKIP POP UPS"},
+    {Kind::Value, kAutosaveRow, "AUTOSAVE"},
     {Kind::Value, kPersistentBodiesRow, "PERSISTENT BODIES"},
     {Kind::Value, kInventoryPauseRow, "INVENTORY PAUSE"},
     {Kind::Value, kPauseOnFocusLossRow, "PAUSE ON FOCUS LOSS"},
@@ -993,6 +1002,7 @@ void RestoreDefaults(int page) {
         game::Opt().skip_intros = defaults.skip_intros;
         game::Opt().skippable_cutscenes = defaults.skippable_cutscenes;
         game::Opt().skip_popups = defaults.skip_popups;
+        game::Opt().autosave = defaults.autosave;
         game::Opt().persistent_bodies = defaults.persistent_bodies;
         game::Opt().inventory_pause = defaults.inventory_pause;
         game::Opt().fps_counter = defaults.fps_counter;

@@ -268,6 +268,7 @@ const app::GameInfo app::kGame = {
         {"skip_intros", &game::Opt().skip_intros, nullptr},
         {"skippable_cutscenes", &game::Opt().skippable_cutscenes, nullptr},
         {"skip_popups", nullptr, &game::Opt().skip_popups},
+        {"autosave", &game::Opt().autosave, nullptr},
         {"persistent_bodies", &game::Opt().persistent_bodies, nullptr},
         {"inventory_pause", &game::Opt().inventory_pause, nullptr},
         {"fps_counter", &game::Opt().fps_counter, nullptr},

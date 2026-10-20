@@ -50,6 +50,7 @@ constexpr Entry kEntries[] = {
     {"TIPS", {u"Astuces", u"Tipps", u"Suggerimenti", u"Consejos"}},
     {"ALL", {u"Tout", u"Alle", u"Tutti", u"Todo"}},
     {"SKIP POP UPS", {u"Passer les fenêtres contextuelles", u"Pop-ups überspringen", u"Salta i pop-up", u"Saltar ventanas emergentes"}},
+    {"AUTOSAVE", {u"Sauvegarde automatique", u"Automatisches Speichern", u"Salvataggio automatico", u"Guardado automático"}},
     {"PERSISTENT BODIES", {u"Corps persistants", u"Bleibende Leichen", u"Corpi persistenti", u"Cuerpos persistentes"}},
     {"INVENTORY PAUSE", {u"Pause de l'inventaire", u"Inventar pausiert", u"Pausa nell'inventario", u"Pausa en el inventario"}},
     {"PAUSE ON FOCUS LOSS", {u"Pause en arrière-plan", u"Pause im Hintergrund", u"Pausa in background", u"Pausa en segundo plano"}},
@@ -79,6 +80,9 @@ constexpr Entry kEntries[] = {
     {"GERMAN", {u"Allemand", u"Deutsch", u"Tedesco", u"Alemán"}},
     {"ITALIAN", {u"Italien", u"Italienisch", u"Italiano", u"Italiano"}},
     {"SPANISH", {u"Espagnol", u"Spanisch", u"Spagnolo", u"Español"}},
+
+    // the autosave message
+    {"Autosaving...", {u"Sauvegarde automatique...", u"Automatisches Speichern...", u"Salvataggio automatico...", u"Guardado automático..."}},
 
     // the cutscene skip prompt
     {"Skip", {u"Passer", u"Überspringen", u"Salta", u"Saltar"}},

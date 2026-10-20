@@ -26,6 +26,7 @@
 #include "xdk/hle.h"
 
 bool CaseShown();  // prompts.cpp: the attache case shows its keys
+void AutosaveFocus(X86Context& ctx);  // autosave.cpp
 
 using namespace kernel;
 using namespace flash;
@@ -721,7 +722,7 @@ std::vector<MenuPorts> ActiveMenuPorts() {
         uint32_t script = R32(screen + kScreenScript);
         uint32_t path = script ? R32(script + kScriptPath) : 0;
         uint32_t clip = Readable(path) ? Resolve(Text(path)) : 0;
-        if (clip) menus.push_back({clip, R32(listener + kListenerPorts)});
+        if (clip) menus.push_back({clip, R32(listener + kListenerPorts), screen});
     }
     return menus;
 }
@@ -745,5 +746,6 @@ void MenuCursorFocus(X86Context& ctx, uint8_t*) {
     ApplyPending(ctx);
     PauseTabsFocus(ctx);
     OptionsMenuFocus(ctx);
+    AutosaveFocus(ctx);
     ctx = saved;
 }

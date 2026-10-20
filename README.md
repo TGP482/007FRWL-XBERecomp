@@ -42,6 +42,7 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 - **Skip Intro** - Skips the intro logos.
 - **Skippable Cutscenes** - Allows the in game cutscenes to be skipped with ESC or the Start button.
 - **Skip Pop Ups** - Choose which pop-ups are skipped: Objectives, the objective messages shown on screen, Tips, the pop-ups that interrupt gameplay such as tutorials, attaché cases, schematics and keys, or All.
+- **Autosave** - Saves the game automatically at the end of every level.
 - **Persistent Bodies** - Prevents the bodies of killed enemies, and the guns and shields they drop, from disappearing.
 - **Inventory Pause** - Toggles the inventory pause.
 - **Pause On Focus Loss** - Pauses the game and its sound while the window is in the background or minimized.

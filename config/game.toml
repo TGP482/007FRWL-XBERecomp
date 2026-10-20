@@ -371,6 +371,11 @@ call = "AmbientOcclusion"
 at = 0x34D094
 call = "DrawFps"
 
+# the same place: the autosave message, top right
+[[hook]]
+at = 0x34D094
+call = "DrawAutosave"
+
 # the same place: the cutscene skip prompt, top right
 [[hook]]
 at = 0x34D094

@@ -13,6 +13,7 @@ using namespace kernel;
 using namespace flash;
 
 void DrawCaseButtonKeys(X86Context& ctx, uint32_t clip);  // prompts.cpp
+bool AutosaveHidesClip(uint32_t clip);  // autosave.cpp
 
 namespace {
 
@@ -235,7 +236,7 @@ void DrawExtraTabs(X86Context& ctx, uint32_t draw, const uint32_t args[3], const
 
 void DrawChild(X86Context& ctx, uint8_t* base, Draw original, uint32_t draw) {
     uint32_t args[3] = {R32(ctx.esp + 4), R32(ctx.esp + 8), R32(ctx.esp + 12)};
-    if (HideOptionsClip(args[1])) {
+    if (HideOptionsClip(args[1]) || AutosaveHidesClip(args[1])) {
         Return(ctx, 0, 0);
         return;
     }
