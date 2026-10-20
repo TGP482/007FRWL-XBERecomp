@@ -15,3 +15,6 @@ X86_FUNC(sub_0031BA9A) {
     if (game::OnGameThread()) ticks -= game::FocusPausedMs();
     Return(ctx, ticks, 0);
 }
+
+// the film clock's thread 0x4D0062 counts a tick each timer period; films time their frames by it
+bool FilmClockHeld(X86Context&, uint8_t*) { return game::g_focus_paused; }
