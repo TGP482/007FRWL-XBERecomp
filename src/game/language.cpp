@@ -1,7 +1,5 @@
 // The language the game shows: its boot screen, language.swf, picks a row of text\localetable.txt
-#include <cstdlib>
-#include <string>
-#include <vector>
+#include <cstring>
 
 #include "common/options.h"
 #include "core/log.h"
@@ -13,8 +11,14 @@ namespace {
 
 // the text manager, made at 0x434000
 constexpr uint32_t kLocalization = 0x77F718;
-constexpr uint32_t kLocale = 0x28;  // the row of the locale table it shows, the script's GetLanguage
-constexpr const char* kTablePath = "D:\\text\\localetable.txt";
+constexpr uint32_t kLocaleTable = 0x0C;  // the table 0x435150 loaded
+constexpr uint32_t kLocale = 0x28;       // the row it shows, the script's GetLanguage
+
+// locale table: row count, rows of 0x14 bytes whose first field is the row's code
+constexpr uint32_t kTableRows = 0x04;
+constexpr uint32_t kTableRowArray = 0x08;
+constexpr uint32_t kRowBytes = 0x14;
+constexpr uint32_t kRowCode = 0x00;
 
 // a setting code and the code its row of the locale table starts with
 struct Language {
@@ -23,34 +27,15 @@ struct Language {
 };
 constexpr Language kLocales[] = {{"fra", "fr"}, {"deu", "de"}, {"ita", "it"}, {"esp", "es"}};
 
-// the rows after the version line as the loader 0x435150 reads them: four fields, five from version 1
-std::vector<std::string> ParseCodes(const std::vector<uint8_t>& file) {
-    std::vector<std::string> fields;
-    std::string line;
-    for (uint8_t c : file) {
-        if (c != '\n' && c != '\r') {
-            line += char(c);
-            continue;
-        }
-        if (!line.empty()) fields.push_back(line);
-        line.clear();
-    }
-    if (!line.empty()) fields.push_back(line);
-    std::vector<std::string> codes;
-    if (fields.empty()) return codes;
-    size_t columns = std::atoi(fields[0].c_str()) >= 1 ? 5 : 4;
-    for (size_t at = 1; at + columns <= fields.size(); at += columns) codes.push_back(fields[at]);
-    return codes;
-}
-
-// the first field of each row of the game's locale table, by row
-const std::vector<std::string>& LocaleCodes() {
-    static const std::vector<std::string> codes = [] {
-        std::vector<uint8_t> file;
-        if (!ReadGameFile(kTablePath, file)) LOGW("language: no %s", kTablePath);
-        return ParseCodes(file);
-    }();
-    return codes;
+// the code of the row the game shows, empty before the text manager and its table are made
+const char* ShownCode() {
+    uint32_t manager = R32(kLocalization);
+    if (!manager) return "";
+    uint32_t table = R32(manager + kLocaleTable);
+    uint32_t row = R32(manager + kLocale);
+    if (!table || row >= R32(table + kTableRows)) return "";
+    uint32_t code = R32(R32(table + kTableRowArray) + row * kRowBytes + kRowCode);
+    return code ? static_cast<const char*>(HostPtr(code)) : "";
 }
 
 }  // namespace
@@ -59,16 +44,15 @@ namespace game {
 
 // the game's language now as one of kLanguages; English before the text manager is made and for its other rows
 const char* ShownLanguage() {
-    const char* english = game::kLanguages[0];
-    uint32_t manager = R32(kLocalization);
-    if (!manager) return english;
-    uint32_t row = R32(manager + kLocale);
-    const std::vector<std::string>& codes = LocaleCodes();
-    if (row >= codes.size()) return english;
+    const char* code = ShownCode();
+    const char* shown = game::kLanguages[0];
     for (const Language& l : kLocales) {
-        if (codes[row] == l.locale) return l.setting;
+        if (std::strcmp(code, l.locale) == 0) shown = l.setting;
     }
-    return english;
+    static const char* reported = nullptr;
+    if (shown != reported) LOGR("language: game shows '%s', panel uses %s", code, shown);
+    reported = shown;
+    return shown;
 }
 
 }  // namespace game

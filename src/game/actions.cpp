@@ -88,6 +88,11 @@ constexpr MapSection kMapSections[] = {
 constexpr uint32_t kHeld = 0;
 constexpr uint32_t kPressed = 1;
 constexpr uint32_t kPortMask = 0xFF;
+constexpr uint32_t kPorts = 4;
+
+// basic_player's idle: the left stick at rest for 200 ms. Its map is hidden under item_select_hud, so with the
+// inventory open and the game running idle never comes and Bond walks on; it is answered for the open inventory
+constexpr uint32_t kIdleAction = 0x46F5C7B4;
 
 // the keys as the input manager's last update saw them, a bit per keyboard action
 struct KeyFrame {
@@ -113,8 +118,8 @@ uint32_t TopMap(int port) {
     return depth && depth <= kMaxMapDepth ? R32(record + kMapDepth + depth * 4) : 0;
 }
 
-Section PlaySection() {
-    uint32_t map = TopMap(input::KeyboardPort());
+Section SectionOf(int port) {
+    uint32_t map = TopMap(port);
     if (!map) return Section::Foot;
     const char* name = static_cast<const char*>(HostPtr(map + kMapName));
     for (const MapSection& known : kMapSections) {
@@ -124,6 +129,28 @@ Section PlaySection() {
 }
 
 Section g_section = Section::Foot;
+
+struct InventoryFrame {
+    bool open = false;
+    bool opened = false;  // this update
+};
+std::array<InventoryFrame, kPorts> g_inventory;
+
+void LatchInventory() {
+    for (uint32_t port = 0; port < kPorts; port++) {
+        InventoryFrame& frame = g_inventory[port];
+        bool open = SectionOf(int(port)) == Section::Inventory;
+        frame.opened = open && !frame.open;
+        frame.open = open;
+    }
+}
+
+std::optional<bool> IdleAnswer(uint32_t port, uint32_t hash, uint32_t mode) {
+    if (hash != kIdleAction || port >= kPorts || !g_inventory[port].open) return std::nullopt;
+    if (mode == kHeld) return true;
+    if (mode == kPressed) return g_inventory[port].opened;
+    return std::nullopt;
+}
 
 const Answer* FindAnswer(uint32_t hash) {
     for (const Answer& answer : kAnswers) {
@@ -148,7 +175,8 @@ X86_EXTERN_FUNC(__imp__sub_0034FEB0);
 X86_FUNC(sub_0034FEB0) {
     g_keys.before = g_keys.now;
     g_keys.now = input::HeldActions();
-    g_section = PlaySection();
+    g_section = SectionOf(input::KeyboardPort());
+    LatchInventory();
     input::SetSection(g_section);
     __imp__sub_0034FEB0(ctx, base);
 }
@@ -157,7 +185,10 @@ X86_FUNC(sub_0034FEB0) {
 X86_EXTERN_FUNC(__imp__sub_0034DDE0);
 X86_FUNC(sub_0034DDE0) {
     uint32_t port = R32(ctx.esp + 4) & kPortMask;
-    std::optional<bool> keys = KeyAnswer(port, R32(ctx.esp + 8), R32(ctx.esp + 12));
+    uint32_t hash = R32(ctx.esp + 8);
+    uint32_t mode = R32(ctx.esp + 12);
+    std::optional<bool> keys = IdleAnswer(port, hash, mode);
+    if (!keys) keys = KeyAnswer(port, hash, mode);
     if (!keys) return __imp__sub_0034DDE0(ctx, base);
     Return(ctx, *keys ? 1 : 0, 3);
 }

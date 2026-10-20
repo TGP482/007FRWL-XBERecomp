@@ -1,6 +1,6 @@
-// Skip pop ups: the tutorial, attache case, schematic and key boxes that pause the game are never shown, a pickup
-// still plays the box's sound. On ALL the objective messages, their flare and sound are skipped too; the messages
-// still queue and time out unseen.
+// Skip pop ups. TIPS: the tutorial, attache case, schematic and key boxes that pause the game are never shown, a
+// pickup still plays the box's sound. OBJECTIVES: the objective messages, their flare and sound are skipped; the
+// messages still queue and time out unseen. ALL: both.
 #include <algorithm>
 #include <set>
 #include <string>
@@ -12,9 +12,11 @@ using namespace kernel;
 
 namespace {
 
-// skip_popups
+// skip_popups bits
 constexpr uint32_t kSkipPausing = 1;
 constexpr uint32_t kSkipObjectives = 2;
+
+bool Skips(uint32_t bit) { return (game::Opt().skip_popups & bit) != 0; }
 
 constexpr int kShowArgs = 3;      // header, text, continue prompt; ret 0xC
 constexpr int kCueArgs = 2;       // player, kind; ret 8
@@ -73,7 +75,7 @@ std::string GuestText(uint32_t address) {
 // Every one comes from a level's TutorialText (0xED190), which still marks it seen.
 X86_EXTERN_FUNC(__imp__sub_0001947B);
 X86_FUNC(sub_0001947B) {
-    if (game::Opt().skip_popups >= kSkipPausing) {
+    if (Skips(kSkipPausing)) {
         uint32_t header = R32(ctx.esp + 4);
         if (!IsTutorial(header)) PlayPopupSound(ctx);
         Return(ctx, 0, kShowArgs);
@@ -96,7 +98,7 @@ X86_FUNC(sub_00021D65) {
     uint32_t message = R32(ctx.esp + 4);
     bool shown = R32(message + kMessageShown) != 0;
     bool objective = g_objective_texts.count(GuestText(R32(message + kMessageText))) != 0;
-    if (shown && objective && game::Opt().skip_popups >= kSkipObjectives) W32(message + kMessageShown, 0);
+    if (shown && objective && Skips(kSkipObjectives)) W32(message + kMessageShown, 0);
     __imp__sub_00021D65(ctx, base);
 }
 
@@ -104,7 +106,7 @@ X86_FUNC(sub_00021D65) {
 // message callback (0xE59A0, thiscall: player, kind) and the score objectives' complete and fail (0xE5A30, 0xE5AD0)
 X86_EXTERN_FUNC(__imp__sub_0001802B);
 X86_FUNC(sub_0001802B) {
-    if (game::Opt().skip_popups >= kSkipObjectives && !g_stat_cue) {
+    if (Skips(kSkipObjectives) && !g_stat_cue) {
         Return(ctx, 0, kCueArgs);
         return;
     }
@@ -121,7 +123,7 @@ X86_FUNC(sub_00017F81) {
 
 X86_EXTERN_FUNC(__imp__sub_00015FC4);
 X86_FUNC(sub_00015FC4) {
-    if (game::Opt().skip_popups >= kSkipObjectives) {
+    if (Skips(kSkipObjectives)) {
         Return(ctx, 0, kScoreCueArgs);
         return;
     }
@@ -130,7 +132,7 @@ X86_FUNC(sub_00015FC4) {
 
 X86_EXTERN_FUNC(__imp__sub_0001D0DA);
 X86_FUNC(sub_0001D0DA) {
-    if (game::Opt().skip_popups >= kSkipObjectives) {
+    if (Skips(kSkipObjectives)) {
         Return(ctx, 0, kScoreCueArgs);
         return;
     }

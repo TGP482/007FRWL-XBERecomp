@@ -47,7 +47,7 @@ constexpr Entry kEntries[] = {
     {"AMBIENT OCCLUSION", {u"Occlusion ambiante", u"Ambient Occlusion", u"Occlusione ambientale", u"Oclusión ambiental"}},
     {"SKIP INTROS", {u"Passer les intros", u"Intros überspringen", u"Salta introduzione", u"Saltar introducción"}},
     {"SKIPPABLE CUTSCENES", {u"Cinématiques passables", u"Überspringbare Zwischensequenzen", u"Filmati saltabili", u"Escenas saltables"}},
-    {"POP UPS", {u"Fenêtres contextuelles", u"Pop-ups", u"Pop-up", u"Ventanas emergentes"}},
+    {"TIPS", {u"Astuces", u"Tipps", u"Suggerimenti", u"Consejos"}},
     {"ALL", {u"Tout", u"Alle", u"Tutti", u"Todo"}},
     {"SKIP POP UPS", {u"Passer les fenêtres contextuelles", u"Pop-ups überspringen", u"Salta i pop-up", u"Saltar ventanas emergentes"}},
     {"PERSISTENT BODIES", {u"Corps persistants", u"Bleibende Leichen", u"Corpi persistenti", u"Cuerpos persistentes"}},

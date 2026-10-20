@@ -20,7 +20,7 @@ inline constexpr int kPlayers = 4;  // the console's controller ports
 struct Options {
     bool skip_intros = false;
     bool skippable_cutscenes = true;  // Start or its key ends an in game cutscene
-    uint32_t skip_popups = 0;  // 0 off, 1 the boxes that pause the game, 2 also the objective messages
+    uint32_t skip_popups = 0;  // bits: 1 the boxes that pause the game, 2 the objective messages
     bool fps_counter = false;
     bool hdr_output = true;  // HDR10 on a display with Windows HDR on
     bool invert_mouse = false;

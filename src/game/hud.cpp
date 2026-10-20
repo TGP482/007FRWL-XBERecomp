@@ -6,10 +6,12 @@
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <vector>
 
 #include "common/aspect.h"
 #include "common/options.h"
+#include "core/log.h"
 #include "game/hud.h"
 #include "xdk/d3d8.h"
 #include "xdk/hle.h"
@@ -182,6 +184,26 @@ void DrawSideBars(X86Context& ctx, uint32_t type, uint32_t vertices, uint32_t co
     DrawSideBar(ctx, type, vertices, count, float(kScreenWidth));
 }
 
+// TEMPORARY: each caller of a 2D draw across the whole screen outside the HUD, menus and films, to find the scope
+void TraceFullScreen(uint32_t caller, uint32_t vertices, uint32_t count) {
+    static std::set<uint32_t> seen;
+    if (count == 0 || seen.count(caller)) return;
+    float low = G<float>(vertices);
+    float high = low;
+    for (uint32_t i = 1; i < count; i++) {
+        float x = G<float>(vertices + i * kVertexStride);
+        low = std::min(low, x);
+        high = std::max(high, x);
+    }
+    if (high - low < kScreenWidth - 1) return;
+    seen.insert(caller);
+    float u = G<float>(vertices + 0x14);
+    float v = G<float>(vertices + 0x18);
+    uint32_t colour = R32(vertices + kVertexColour);
+    LOGR("2D trace: caller %08X, %u vertices, x %.1f..%.1f, uv %.3f %.3f, colour %08X", caller, count, low, high, u,
+         v, colour);
+}
+
 }  // namespace
 
 void HudAnchorLeft(bool on) { g_anchor = on && game::Wide() ? kLeft : kOff; }
@@ -241,6 +263,7 @@ X86_FUNC(sub_00278AB0) {
     uint32_t vertices = R32(ctx.esp + 8);
     uint32_t count = R32(ctx.esp + 12);
     bool moved = g_film != Film::None || g_anchor != kOff;
+    if (!g_bar && !moved && !g_menu) TraceFullScreen(R32(ctx.esp), vertices, count);
     if (g_bar || !moved || !DrawsToScreen()) return __imp__sub_00278AB0(ctx, base);
     if (g_menu && g_film == Film::None) DrawSideBars(ctx, type, vertices, count);
     static std::vector<Point> saved;
