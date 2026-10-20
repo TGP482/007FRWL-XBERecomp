@@ -55,6 +55,12 @@ struct Body {
     Kept held[kHeldItemCount];
 };
 
+// mini boss meter state (0xE60C0 through 0x14471): shown, then the enemy it follows
+constexpr uint32_t kMeterShown = 0x00;
+constexpr uint32_t kMeterTarget = 0x3C;
+
+uint32_t g_meter_target = 0;  // the enemy the mini boss meter shows
+
 std::deque<Body> g_bodies;
 std::deque<Kept> g_items;
 std::unordered_set<uint32_t> g_posed;  // kept bodies, faded ones too until deleted
@@ -102,6 +108,8 @@ void Forget(Kept& kept, uint32_t actor) {
 // second long fade of the body and its held items, the last of which deletes the body
 bool KeepCorpse(X86Context& ctx, uint8_t*) {
     if (!game::Opt().persistent_bodies) return false;
+    // the console deletes a mini boss's body, which is what hides its meter
+    if (ctx.ebx == g_meter_target) return false;
     g_bodies.push_back(KeptBody(ctx.ebx));
     g_posed.insert(ctx.ebx);
     if (g_bodies.size() > kKeptBodies) {
@@ -146,6 +154,14 @@ static bool AnimationLoaded(X86Context& ctx, uint32_t actor) {
     uint32_t data = CallGuest(ctx, kFindAnimation, {R32(instance + kAnimationSet), R32(instance + kAnimationId)});
     ctx = saved;
     return data && data == R32(instance + kAnimationData);
+}
+
+// mini boss meter update, thiscall on the HUD (state)
+X86_EXTERN_FUNC(__imp__sub_00014471);
+X86_FUNC(sub_00014471) {
+    uint32_t state = R32(ctx.esp + 4);
+    g_meter_target = R32(state + kMeterShown) ? R32(state + kMeterTarget) : 0;
+    __imp__sub_00014471(ctx, base);
 }
 
 // actor animation update: a kept body whose animation is gone skips it and holds its pose
