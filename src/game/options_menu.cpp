@@ -99,7 +99,7 @@ const char* const kPauseTitle = "$PAUSE_OPTIONS";
 // the stock rows' texts, in any order: the rows are ordered by their place on screen
 const char* const kFrontEndRows[] = {"$OPTIONS_BRIGHTNESS", "$OPTIONS_CREDITS", "$OPTIONS_NFS"};
 constexpr int kFrontEnd = 0;  // in kMenus
-constexpr int kNfsDemoLabel = 2;  // its native LaunchDemo (0x1B78A0) does nothing, the page would wait on it for good
+constexpr int kNfsDemoLabel = 2;  // plays movies/nfsdemo.vp6 full screen (launchXboxDemo in the page script)
 const char* const kPauseRows[] = {
     "$OPTIONS_VIBRATION",
     "$OPTIONS_INVERTHOR",
@@ -546,11 +546,8 @@ bool TakePageButton(X86Context& ctx, uint32_t code) {
 }
 
 // a button on the list: the entries open their page
-bool OnNfsDemo() { return g_layout.menu == kFrontEnd && CursorIndex() == g_layout.row_of[kNfsDemoLabel]; }
-
 bool TakeListButton(X86Context& ctx, uint32_t code) {
     bool accept = code == R32(g_state.screen + kScreenAccept);
-    if (accept && OnNfsDemo()) return true;
     int entry = CursorIndex() - g_layout.stock;
     bool on_entry = entry >= 0 && entry < EntryCount();
     if (!on_entry || !accept) return false;

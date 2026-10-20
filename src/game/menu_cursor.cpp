@@ -200,9 +200,9 @@ uint32_t ReceiverOf(uint32_t code) {
     return 0;
 }
 
-// the active menu page that the keyboard's confirm, down or start would reach
+// the active menu page that the keyboard's confirm, down, start or back would reach
 uint32_t MenuScreen() {
-    for (uint32_t code : {kCodeAccept, kCodeDown, kCodeStart}) {
+    for (uint32_t code : {kCodeAccept, kCodeDown, kCodeStart, kCodeCancel}) {
         uint32_t screen = ReceiverOf(code);
         if (screen && R32(screen) == kMenuScreenVtable && R32(screen + kScreenActive)) return screen;
     }
@@ -577,8 +577,10 @@ Point StagePoint(const input::Pointer& cursor) {
 
 // acting
 
+// a page whose script takes the codes itself (the brightness page) backs out on B, whatever its cancel field holds
 input::PageKeys KeysOf(uint32_t screen) {
     input::Tap accept = TapFor(R32(screen + kScreenAccept), input::Tap::A);
+    if (HasInputHandler(screen)) return {accept, input::Tap::B};
     return {accept, TapFor(R32(screen + kScreenCancel), input::Tap::B)};
 }
 

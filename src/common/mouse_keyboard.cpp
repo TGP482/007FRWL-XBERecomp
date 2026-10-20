@@ -421,7 +421,7 @@ const char* SectionHeading(Section section) {
         case Section::Car:
             return "CAR";
         case Section::Jetpack:
-            return "JETPACK AND Q COPTER";
+            return "FLYING";
         default:
             return nullptr;
     }
