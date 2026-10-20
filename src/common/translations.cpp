@@ -132,6 +132,7 @@ constexpr Entry kEntries[] = {
     {"FIRE WEAPON", {u"Tirer avec l'arme", u"Waffe abfeuern", u"Spara con l'arma", u"Disparar el arma"}},
     {"TARGET LOCK", {u"Verrouiller la cible", u"Ziel erfassen", u"Aggancia il bersaglio", u"Fijar objetivo"}},
     {"CYCLE WEAPON", {u"Changer d'arme", u"Waffe wechseln", u"Cambia arma", u"Cambiar arma"}},
+    {"TIRE SLASHER", {u"Coupe-pneus", u"Reifenschlitzer", u"Tagliagomme", u"Cortaneumáticos"}},
     {"JETPACK AND Q COPTER", {u"Jetpack et Q-Copter", u"Jetpack und Q-Copter", u"Jetpack e Q-Copter", u"Jetpack y Q-Copter"}},
     {"FLY FORWARD", {u"Voler en avant", u"Vorwärts fliegen", u"Vola avanti", u"Volar hacia delante"}},
     {"FLY BACK", {u"Voler en arrière", u"Rückwärts fliegen", u"Vola indietro", u"Volar hacia atrás"}},

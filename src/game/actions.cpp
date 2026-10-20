@@ -26,15 +26,15 @@ struct Answer {
 
 constexpr Answer kAnswers[] = {
     // basic_player
-    {0x7DDCA04E, Section::Foot, {"jump"}},              // jump
-    {0x2A1213D2, Section::Foot, {"jump", "interact"}},  // vault
-    {0x97DEE18E, Section::Foot, {"jump", "interact"}},  // step_up
-    {0xF7E02080, Section::Foot, {"jump", "interact"}},  // vault_and_climb
-    {0x196A4515, Section::Foot, {"jump", "interact"}},  // climb
-    {0xC4CCF1F7, Section::Foot, {"interact"}},          // use_object
-    {0xA2D67105, Section::Foot, {"interact"}},          // enter_vehicle
-    {0x83EEAB39, Section::Foot, {"reload"}},            // reload
-    {0xCBC9B2A3, Section::Foot, {"inventory"}},         // itemselect_activate
+    {0x7DDCA04E, Section::Foot, {"interact"}},   // jump
+    {0x2A1213D2, Section::Foot, {"interact"}},   // vault
+    {0x97DEE18E, Section::Foot, {"interact"}},   // step_up
+    {0xF7E02080, Section::Foot, {"interact"}},   // vault_and_climb
+    {0x196A4515, Section::Foot, {"interact"}},   // climb
+    {0xC4CCF1F7, Section::Foot, {"interact"}},   // use_object
+    {0xA2D67105, Section::Foot, {"interact"}},   // enter_vehicle
+    {0x83EEAB39, Section::Foot, {"reload"}},     // reload
+    {0xCBC9B2A3, Section::Foot, {"inventory"}},  // itemselect_activate
     // item_select_hud
     {0x9D72D5CB, Section::Inventory, {"inventory_up"}},      // itemselect_up
     {0x3453D1D2, Section::Inventory, {"inventory_down"}},    // itemselect_down
@@ -53,6 +53,7 @@ constexpr Answer kAnswers[] = {
     {0x7FC16C7C, Section::Car, {"car_target_lock"}},   // targetlock
     {0xAC012CA4, Section::Car, {"car_target_lock"}},   // nexttarget
     {0x600284C2, Section::Car, {"car_cycle_weapon"}},  // cycleweapon
+    {0x42D8C8B3, Section::Car, {"car_tire_slasher"}},  // usegadget
     {0x811C91EB, Section::Car, {"car_exit"}},          // exit_vehicle
     // jetpackplayer
     {0x2FC31762, Section::Jetpack, {"fly_up"}},    // thrust_up

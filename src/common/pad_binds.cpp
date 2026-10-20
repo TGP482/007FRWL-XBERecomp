@@ -32,7 +32,7 @@ struct PadAction {
 };
 // D-pad left and right and the left thumb are on no action and keep their own controls
 constexpr PadAction kPadActions[] = {
-    {"jump", "JUMP / INTERACT / RELOAD", 0},
+    {"jump", "INTERACT / RELOAD", 0},
     {"dive_roll", "DIVE ROLL", 1},
     {"focus", "FOCUS", 2},
     {"wall_cover", "WALL COVER / EXIT VEHICLE", 3},
