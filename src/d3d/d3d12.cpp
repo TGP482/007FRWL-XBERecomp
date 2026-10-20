@@ -529,6 +529,11 @@ void Color(uint32_t argb, float* o) {
 
 // D3DBLEND, the console uses GL values
 constexpr uint32_t kBlendDestColor = 0x306;  // D3DBLEND_DESTCOLOR
+constexpr uint32_t kBlendConstantAlpha = 0x8003;
+constexpr uint32_t kBlendInvConstantAlpha = 0x8004;
+
+// D3DBLEND constant alpha weighs every channel by the blend colour's alpha
+bool UsesConstantAlpha(uint32_t blend) { return blend == kBlendConstantAlpha || blend == kBlendInvConstantAlpha; }
 
 D3D12_BLEND Blend(uint32_t v, bool alpha) {
     switch (v) {
@@ -543,8 +548,8 @@ D3D12_BLEND Blend(uint32_t v, bool alpha) {
         case kBlendDestColor: return alpha ? D3D12_BLEND_DEST_ALPHA : D3D12_BLEND_DEST_COLOR;
         case 0x307: return alpha ? D3D12_BLEND_INV_DEST_ALPHA : D3D12_BLEND_INV_DEST_COLOR;
         case 0x308: return D3D12_BLEND_SRC_ALPHA_SAT;
-        case 0x8001: case 0x8003: return D3D12_BLEND_BLEND_FACTOR;
-        case 0x8002: case 0x8004: return D3D12_BLEND_INV_BLEND_FACTOR;
+        case 0x8001: case kBlendConstantAlpha: return D3D12_BLEND_BLEND_FACTOR;
+        case 0x8002: case kBlendInvConstantAlpha: return D3D12_BLEND_INV_BLEND_FACTOR;
         default: return D3D12_BLEND_ONE;
     }
 }
@@ -3054,12 +3059,21 @@ void FillLightConstants(const State& s, const FixedKey& fk, DrawConstants& c) {
     }
 }
 
+// A fading model draws with constant alpha, which ignores its textures' alpha: cut out parts (the dinner jacket's
+// flower) would show their transparent texels black, so texels under half alpha are left out instead
+void CutFadeCoverage(DrawConstants& c) {
+    constexpr float kHalfAlpha = 127.0f;
+    c.misc[0] = kHalfAlpha;
+    c.misc[1] = float(D3D12_COMPARISON_FUNC_GREATER - 1);
+}
+
 void D3D12Backend::UploadConstants(const State& s, const DrawShaders& sh, const PsoKey& k, const DrawTextures& stages,
                                    GuestExtent size, DrawConstants& c) {
     Alloc vc = Upload(sizeof(s.vsc), 256);
     std::memcpy(vc.cpu, s.vsc.data(), sizeof(s.vsc));
     Alloc dc = Upload(sizeof(DrawConstants), 256);
     FillSurfaceConstants(s, size, c);
+    if (k.blend && UsesConstantAlpha(k.src) && !SimpleState(s, kMAlphaTestEnable)) CutFadeCoverage(c);
     // points: host pixels per console pixel, also keeps them off the far edge pull out of screen passes
     if (k.topo == uint32_t(Topology::Points)) c.surf[3] = PointScale();
     FillFogConstants(s, sh.prog, c);
@@ -3394,6 +3408,7 @@ void D3D12Backend::SetViewportScissor(const State& s, uint32_t gw) {
 void D3D12Backend::SetBlendFactorStencilRef(const State& s, const PsoKey& k) {
     float bf[4];
     Color(SimpleState(s, kMBlendColor), bf);
+    if (k.blend && (UsesConstantAlpha(k.src) || UsesConstantAlpha(k.dst))) std::fill(bf, bf + 3, bf[3]);
     cl_->OMSetBlendFactor(bf);
     uint32_t ref = SimpleState(s, kMStencilRef) & 0xFF;
     if (k.ao_mark) ref = Translucent(s, k) ? kAoStencilBit : 0;
