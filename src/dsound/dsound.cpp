@@ -833,10 +833,6 @@ HLE_STDCALL(IDirectSound_SetI3DL2Listener, 3) {
         uint32_t v = R32(a[1] + i * 4);
         p[i] = i < 2 || i == 5 || i == 7 ? float(int32_t(v)) : F32(v);
     }
-    static int listeners = 0;  // TEMPORARY trace
-    if (listeners++ < 64)
-        LOGR("dsound: listener room %.0f hf %.0f, decay %.2f s ratio %.2f, reflections %.0f after %.3f s, reverb %.0f after %.3f s, diffusion %.0f density %.0f",
-             p[0], p[1], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10]);
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     g_reverb.Set(p);
     return 0;
@@ -981,24 +977,12 @@ BUFFER(SetBufferData, 3) {
     v.block = -1;
     return 0;
 }
-// TEMPORARY trace: looping sounds shorter than 100 ms
-void TraceShortLoop(const Voice& v) {
-    constexpr uint32_t kShortLoop = 4800;
-    static int traced = 0;
-    uint32_t frames = FramesOf(v, v.loop_len);
-    if (frames >= kShortLoop || traced >= 64) return;
-    traced++;
-    LOGR("dsound: short loop %X tag %X, %u ch, %u Hz, freq %u, loop %u bytes at %u (%u frames), buffer %u bytes, bin 11 %d mB",
-         v.obj, v.tag, v.channels, v.rate, v.freq, v.loop_len, v.loop_start, frames, v.bytes, v.bin_mb[kBinReverb]);
-}
-
 BUFFER(Play, 4) {
     v.has_mix = false;  // a new sound does not ramp from the last one's levels
     v.playing = true;
     v.looping = a[3] & 1;
     if (a[3] & 2) v.pos = 0;
     v.sync = a[3] & 4;
-    if (v.looping) TraceShortLoop(v);
     return 0;
 }
 BUFFER(Stop, 1) {

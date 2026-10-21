@@ -1076,8 +1076,6 @@ X86_FUNC(sub_0001DA08) {
     uint32_t screen = ctx.ecx;
     uint32_t code = R32(ctx.esp + 8);
     uint32_t page = PageScreenFor(screen, code);
-    // TEMPORARY trace
-    if (page != screen) LOGR("options menu: button %u from screen %08X goes to the page", code, screen);
     bool taken = TakePauseTabButton(ctx, screen, code) || TakeButton(ctx, page, code);
     ctx = saved;
     if (taken) {

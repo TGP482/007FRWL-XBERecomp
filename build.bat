@@ -53,7 +53,7 @@ rem the configure step wrote where the SDK is
 if not exist "%OUT%\sdk_dir.txt" echo       out\build\%PRESET%\sdk_dir.txt was not written, update the SDK. && goto :fail
 set /p SDK=<"%OUT%\sdk_dir.txt"
 if not exist config mkdir config
-"%OUT%\xbe_symbols.exe" assets\%GAME_XBE% "%SDK%\xdk" --out config\game.toml || goto :fail
+"%OUT%\xbe_symbols.exe" assets\%GAME_XBE% "%SDK%\xdk" --library %GAME_EXE%.dll --out config\game.toml || goto :fail
 
 rem game
 :game
