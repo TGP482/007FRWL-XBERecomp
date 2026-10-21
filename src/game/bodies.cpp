@@ -1,5 +1,9 @@
+#include <algorithm>
+#include <array>
+#include <cstring>
 #include <deque>
-#include <unordered_set>
+#include <unordered_map>
+#include <vector>
 
 #include "common/options.h"
 #include "xdk/hle.h"
@@ -8,7 +12,8 @@ using namespace kernel;
 
 // Persistent bodies: the newest dead enemies, and the guns and shields they drop, are never faded out and deleted.
 // Older ones fade as on the console. A kept body animates only while its animation is still loaded: the game frees
-// it a while after the console would have deleted the body.
+// it a while after the console would have deleted the body. From then on its last pose is written back each update,
+// since the game hands the body fresh bone buffers when its area comes back.
 
 namespace {
 
@@ -30,6 +35,18 @@ constexpr uint32_t kAnimationSet = 0x04;
 constexpr uint32_t kAnimationData = 0x0C;
 constexpr uint32_t kAnimationId = 0x10;
 constexpr uint32_t kFindAnimation = 0x3EE300;  // cdecl (set, id), the loaded data or 0
+
+// the instance's skeleton (0x3F1A20) and its bone matrices: buffer i holds bone i's matrix at its index
+constexpr uint32_t kAnimationSkeleton = 0x0A;  // short, in the set's skeletons
+constexpr uint32_t kSetSkeletonCount = 0x18;
+constexpr uint32_t kSetSkeletons = 0x1C;
+constexpr uint32_t kSkeletonBytes = 0x14;
+constexpr uint32_t kSkeletonBones = 0x04;
+constexpr uint32_t kAnimationBuffers = 0x64;
+constexpr uint32_t kAnimationBufferIndex = 0x6C;  // shorts
+constexpr uint32_t kBufferData = 0x08;
+constexpr uint32_t kMatrixBytes = 0x40;
+constexpr int kMaxBones = 128;
 
 // enemy: its two held items, each a pointer 0x20 into the item
 constexpr uint32_t kHeldItems = 0xAF0;
@@ -61,9 +78,15 @@ constexpr uint32_t kMeterTarget = 0x3C;
 
 uint32_t g_meter_target = 0;  // the enemy the mini boss meter shows
 
+struct Bone {
+    std::array<uint8_t, kMatrixBytes> matrix{};
+    bool latched = false;
+};
+using Pose = std::vector<Bone>;
+
 std::deque<Body> g_bodies;
 std::deque<Kept> g_items;
-std::unordered_set<uint32_t> g_posed;  // kept bodies, faded ones too until deleted
+std::unordered_map<uint32_t, Pose> g_poses;  // kept bodies, faded ones too until deleted, and their last pose
 
 Kept Keep(uint32_t actor) { return actor ? Kept{actor, R32(actor)} : Kept{}; }
 
@@ -111,7 +134,7 @@ bool KeepCorpse(X86Context& ctx, uint8_t*) {
     // the console deletes a mini boss's body, which is what hides its meter
     if (ctx.ebx == g_meter_target) return false;
     g_bodies.push_back(KeptBody(ctx.ebx));
-    g_posed.insert(ctx.ebx);
+    g_poses[ctx.ebx];
     if (g_bodies.size() > kKeptBodies) {
         Body oldest = g_bodies.front();
         g_bodies.pop_front();
@@ -142,7 +165,7 @@ X86_FUNC(sub_0033C220) {
         for (Kept& held : body.held) Forget(held, actor);
     }
     for (Kept& item : g_items) Forget(item, actor);
-    g_posed.erase(actor);
+    g_poses.erase(actor);
     __imp__sub_0033C220(ctx, base);
 }
 
@@ -156,6 +179,47 @@ static bool AnimationLoaded(X86Context& ctx, uint32_t actor) {
     return data && data == R32(instance + kAnimationData);
 }
 
+static int BoneCount(uint32_t instance) {
+    if (!instance) return 0;
+    uint32_t set = R32(instance + kAnimationSet);
+    int skeleton = G<int16_t>(instance + kAnimationSkeleton);
+    if (!set || skeleton < 0 || skeleton >= int(R32(set + kSetSkeletonCount))) return 0;
+    uint32_t entry = R32(set + kSetSkeletons) + uint32_t(skeleton) * kSkeletonBytes;
+    return std::min(int(R32(entry + kSkeletonBones)), kMaxBones);
+}
+
+// where bone i's matrix is now, 0 for a bone without a buffer
+static uint32_t BoneMatrix(uint32_t instance, int bone) {
+    uint32_t buffers = R32(instance + kAnimationBuffers);
+    uint32_t buffer = buffers ? R32(buffers + 4 * uint32_t(bone)) : 0;
+    if (!buffer) return 0;
+    uint32_t data = R32(buffer + kBufferData);
+    if (!data) return 0;
+    int16_t index = G<int16_t>(R32(instance + kAnimationBufferIndex) + 2 * uint32_t(bone));
+    uint32_t matrix = data + uint32_t(index) * kMatrixBytes;
+    return mem::IsCommitted(matrix) ? matrix : 0;
+}
+
+static void LatchPose(uint32_t actor, Pose& pose) {
+    uint32_t instance = R32(actor + kActorAnimation);
+    pose.resize(size_t(BoneCount(instance)));
+    for (size_t i = 0; i < pose.size(); i++) {
+        uint32_t matrix = BoneMatrix(instance, int(i));
+        if (!matrix) continue;
+        std::memcpy(pose[i].matrix.data(), HostPtr(matrix), kMatrixBytes);
+        pose[i].latched = true;
+    }
+}
+
+static void ApplyPose(uint32_t actor, const Pose& pose) {
+    uint32_t instance = R32(actor + kActorAnimation);
+    size_t bones = std::min(pose.size(), size_t(BoneCount(instance)));
+    for (size_t i = 0; i < bones; i++) {
+        uint32_t matrix = BoneMatrix(instance, int(i));
+        if (matrix && pose[i].latched) std::memcpy(HostPtr(matrix), pose[i].matrix.data(), kMatrixBytes);
+    }
+}
+
 // mini boss meter update, thiscall on the HUD (state)
 X86_EXTERN_FUNC(__imp__sub_00014471);
 X86_FUNC(sub_00014471) {
@@ -164,12 +228,20 @@ X86_FUNC(sub_00014471) {
     __imp__sub_00014471(ctx, base);
 }
 
-// actor animation update: a kept body whose animation is gone skips it and holds its pose
+// actor animation update: a kept body whose animation is gone skips it and gets its last pose back
 X86_EXTERN_FUNC(__imp__sub_0033B720);
 X86_FUNC(sub_0033B720) {
-    if (g_posed.count(ctx.ecx) && !AnimationLoaded(ctx, ctx.ecx)) {
+    uint32_t actor = ctx.ecx;
+    auto kept = g_poses.find(actor);
+    if (kept == g_poses.end()) {
+        __imp__sub_0033B720(ctx, base);
+        return;
+    }
+    if (!AnimationLoaded(ctx, actor)) {
+        ApplyPose(actor, kept->second);
         Return(ctx, 0, kAnimateArgs);
         return;
     }
     __imp__sub_0033B720(ctx, base);
+    LatchPose(actor, kept->second);
 }
