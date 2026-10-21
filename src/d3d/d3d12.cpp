@@ -3542,8 +3542,10 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     PsoKey k;
     BuildPipelineKey(s, a, sh.vh, sh.ph, k);
     ApplyOverlayBias(sh, k);
-    // a quad is a picture or a pass over the screen: left out it shows what lies under it, so it waits for its pipeline
-    ID3D12PipelineState* pso = EnsurePipeline(k, count <= kQuadVertices);
+    // a quad is a picture or a pass over the screen: left out it shows what lies under it, so it waits for its pipeline;
+    // so does a fading model, whose short fade would otherwise pass while its first pipeline builds
+    bool wait = count <= kQuadVertices || (k.blend && UsesConstantAlpha(k.src));
+    ID3D12PipelineState* pso = EnsurePipeline(k, wait);
     if (!pso) return;
     cl_->SetPipelineState(pso);
 
