@@ -8,8 +8,8 @@
 #include "game/hud.h"
 #include "xdk/hle.h"
 
-// Frame rate (top left) and other host text, drawn by the game's own text manager, the one the HUD and menus use, over
-// the finished frame.
+// Frame rate (top left), the front end watermark and other host text, drawn by the game's own text manager, the one
+// the HUD and menus use, over the finished frame.
 
 namespace {
 
@@ -26,6 +26,7 @@ constexpr uint32_t kManagerPageWidth = 0x60;
 constexpr uint32_t kManagerPageHeight = 0x64;
 constexpr uint32_t kFontHeight = 0x18;  // int
 constexpr uint32_t kBlack = 0;  // palette indices
+constexpr uint32_t kGrey = 11;
 constexpr uint32_t kWhite = 12;
 constexpr uint32_t kAlignLeft = 0;
 constexpr uint32_t kAlignRight = 2;  // the position is the text's right end
@@ -71,10 +72,16 @@ struct CornerPlace {
     float top;
     float scale;
     uint32_t align;
+    uint32_t colour;
+    bool shadow;
 };
-// the frame rate as on the other recomps, 8 lines in on a page 480 high; the skip prompt inside the letterbox
-constexpr CornerPlace kTopLeftPlace = {0.009f, 0.016f, 0.6f, kAlignLeft};
-constexpr CornerPlace kTopRightPlace = {0.94f, 0.07f, 0.8f, kAlignRight};
+// the frame rate as on the other recomps, 8 lines in on a page 480 high; the skip prompt inside the letterbox;
+// the watermark grey without a shadow as on the other recomps, bottom right of the 4:3 page
+constexpr CornerPlace kTopLeftPlace = {0.009f, 0.016f, 0.6f, kAlignLeft, kWhite, true};
+constexpr CornerPlace kTopRightPlace = {0.94f, 0.07f, 0.8f, kAlignRight, kWhite, true};
+constexpr CornerPlace kBottomRightPlace = {0.95f, 0.935f, 0.6f, kAlignRight, kGrey, false};
+
+constexpr char kWatermark[] = "XBE Recomp V1";
 
 // memory the text manager reads: the position, then the text
 constexpr uint32_t kScratchText = 8;
@@ -135,19 +142,42 @@ void BeginOverlay(X86Context& ctx, uint32_t manager, uint32_t camera) {
     G<float>(manager + kManagerDepth) = G<float>(kOverlayDepth);
 }
 
+const CornerPlace& PlaceOf(Corner corner) {
+    switch (corner) {
+        case Corner::TopLeft:
+            return kTopLeftPlace;
+        case Corner::TopRight:
+            return kTopRightPlace;
+        default:
+            return kBottomRightPlace;
+    }
+}
+
+void ApplyAnchor(Corner corner) {
+    switch (corner) {
+        case Corner::TopLeft:
+            HudAnchorLeft(true);
+            break;
+        case Corner::TopRight:
+            HudAnchorRight(true);
+            break;
+        default:
+            HudAnchorCentre(true);
+    }
+}
+
 // the line and its shadow, in the corner's place
 void ShowLine(X86Context& ctx, uint32_t manager, uint32_t text, Corner corner, float drop) {
     using namespace kernel;
-    const CornerPlace& place_at = corner == Corner::TopLeft ? kTopLeftPlace : kTopRightPlace;
+    const CornerPlace& place_at = PlaceOf(corner);
     uint32_t position = Scratch();
     Place place = PagePlace(manager, place_at, drop);
     Place shadow = {place.x + kShadowX * G<float>(manager + kManagerPageWidth),
                     place.y - kShadowY * G<float>(manager + kManagerPageHeight)};
-    if (corner == Corner::TopLeft) HudAnchorLeft(true);
-    else HudAnchorRight(true);
+    ApplyAnchor(corner);
     ctx.ecx = manager;  // the text manager's calls are thiscall
-    Show(ctx, kBlack, shadow, position, text, place_at);
-    Show(ctx, kWhite, place, position, text, place_at);
+    if (place_at.shadow) Show(ctx, kBlack, shadow, position, text, place_at);
+    Show(ctx, place_at.colour, place, position, text, place_at);
     HudAnchorLeft(false);
 }
 
@@ -177,6 +207,7 @@ void DrawCornerText(X86Context& ctx, std::string_view line, Corner corner, float
 
 // the frame is finished and about to be shown
 void DrawFps(X86Context& ctx, uint8_t*) {
+    if (InFrontEnd()) DrawCornerText(ctx, kWatermark, Corner::BottomRight);
     if (!game::Opt().fps_counter) return;
     char line[kMaxChars];
     std::snprintf(line, sizeof(line), "FPS: %.1f", double(game::g_fps.load()));

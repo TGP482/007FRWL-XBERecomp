@@ -3,6 +3,7 @@
 // The Flash menus stay 4:3 in the middle, black beside a backdrop that reaches the 4:3 sides; films fill the screen up to
 // their letterbox or stay 4:3 as set; a menu's film stays 4:3.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -71,6 +72,7 @@ Film g_film = Film::None;  // the film's quad draws on a wider screen
 float g_letterbox = 0;     // share of the shown film height that is letterbox
 bool g_menu = false;       // inside the Flash render
 bool g_bar = false;        // a side bar is being drawn
+std::chrono::steady_clock::time_point g_menu_film_shown;
 
 struct Span {
     float left;
@@ -186,6 +188,13 @@ void DrawSideBars(X86Context& ctx, uint32_t type, uint32_t vertices, uint32_t co
 
 void HudAnchorLeft(bool on) { g_anchor = on && game::Wide() ? kLeft : kOff; }
 void HudAnchorRight(bool on) { g_anchor = on && game::Wide() ? kRight : kOff; }
+void HudAnchorCentre(bool on) { g_anchor = on && game::Wide() ? kCentre : kOff; }
+
+// the front end's film drew lately; a film loop restarting can skip a frame
+bool InFrontEnd() {
+    constexpr auto kRecent = std::chrono::milliseconds(500);
+    return std::chrono::steady_clock::now() - g_menu_film_shown < kRecent;
+}
 
 // tree walk 0x3583B0, before a widget's Draw: esi the widget, [esp] its screen position
 void HudWidgetBegin(X86Context& ctx, uint8_t*) {
@@ -229,6 +238,7 @@ X86_FUNC(sub_003626D0) {
 X86_EXTERN_FUNC(__imp__sub_00438370);
 X86_FUNC(sub_00438370) {
     bool menu = G<float>(ctx.ecx + kQuadFilmWidth) == kMenuFilmWidth;
+    if (menu) g_menu_film_shown = std::chrono::steady_clock::now();
     if (game::Wide()) g_film = menu ? Film::Menu : Film::Shown;
     __imp__sub_00438370(ctx, base);
     g_film = Film::None;
