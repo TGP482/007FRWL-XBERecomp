@@ -254,7 +254,7 @@ bool ControllerPlugged(int slot) { return slot >= 0 && slot < kPlayers && RawPad
 
 // what the runtime asks of the game; strings must be set, hooks may stay null
 const app::GameInfo app::kGame = {
-    .title = L"007: From Russia with Love", // window and splash
+    .title = L"007: From Russia with Love - XBE Recomp", // window, splash and compiler
     .short_title = L"007 FRWL",             // message boxes
     .name = L"007FRWL",                     // window classes, crash dumps, handover event
     .log = "007frwl",                       // log file prefix

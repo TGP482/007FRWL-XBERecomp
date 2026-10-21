@@ -94,6 +94,7 @@ constexpr Legend kLegends[] = {
 struct Token {
     const char* name;
     Buttons buttons;
+    int play = -1;  // the button whose key play names when its own buttons have none
 };
 constexpr Token kTokens[] = {
     {"RDDown", {kA}},
@@ -105,7 +106,7 @@ constexpr Token kTokens[] = {
     {"LSTop", {kLeftTrigger}},
     {"RSTop", {kRightTrigger}},
     {"LDUpDown", {kUp, kDown}},
-    {"LDLeftRight", {kLeft, kRight}},
+    {"LDLeftRight", {kLeft, kRight}, kWhite},  // weapons are picked in the inventory
 };
 
 // English wording, whole words, applied in order
@@ -894,6 +895,7 @@ bool NameKeys(std::string& text) {
         if (close == std::string::npos) break;
         const Token* token = TokenNamed(text.substr(open + 1, close - open - 1));
         std::string label = token ? Label(token->buttons, menu) : std::string();
+        if (label.empty() && token && !menu && token->play >= 0) label = Label({token->play}, false);
         if (label.empty()) continue;
         std::string before = open == 0 || SpaceAt(text, open - 1) ? "" : " ";
         std::string after = SpaceAt(text, close + 1) ? "" : " ";
@@ -1045,12 +1047,15 @@ X86_FUNC(sub_00357060) {
     uint32_t written = WriteText(*reworded);
     W32(ctx.esp + kDrawTextArg, written);
     uint32_t rect = R32(ctx.esp + kDrawRectArg);
-    float width = LineWidth(ctx, written, G<float>(ctx.esp + kDrawScaleArg));
+    float scale = G<float>(ctx.esp + kDrawScaleArg);
+    float width = LineWidth(ctx, written, scale);
     float box = G<float>(rect + kRectWidth);
     std::string original(Text(text), strnlen(Text(text), kMaxText));
     if (box > 0 && IsLegendText(original)) g_label_share[original] = width / box;
     float x = G<float>(rect + kRectX);
-    FitRect(rect, width, R32(ctx.esp + kDrawAlignArg));
+    // a text the console wraps keeps its box and wraps the same
+    bool one_line = LineWidth(ctx, text, scale) <= box;
+    if (one_line) FitRect(rect, width, R32(ctx.esp + kDrawAlignArg));
     __imp__sub_00357060(ctx, base);
     G<float>(rect + kRectX) = x;
     G<float>(rect + kRectWidth) = box;
