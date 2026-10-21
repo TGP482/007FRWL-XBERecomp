@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <bit>
 #include <cstring>
+#include <iterator>
 
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
@@ -7,7 +9,8 @@
 
 // Free aim: holding aim with any gun goes into the rocket launcher's over the shoulder aim, the throw state
 // (PlayerThrowItemSM), instead of locking on. The gun is passed off as the rocket launcher only for the checks that
-// let it in and let it fire there, and its shots go down the middle of the view. None of it runs in cutscenes.
+// let it in and let it fire there, and its shots go down the middle of the view. None of it runs in cutscenes or
+// while the level shows a scene of its own and play goes on.
 
 using namespace kernel;
 
@@ -72,6 +75,26 @@ constexpr uint32_t kMatrixAt = 0x20;
 constexpr uint32_t kMatrixSize = 0x40;
 constexpr float kViewRayLength = 100.0f;  // as the crosshair's own target test 0x13D000
 
+// each port's view director keeps a stack of camera infos (push 0x38EAF0), each link 0x20 into its info
+constexpr uint32_t kViewsShared = 0x30;  // one view for every port
+constexpr uint32_t kViewDirectors = 0x0C;
+constexpr uint32_t kDirectorBytes = 0x18C;
+constexpr uint32_t kDirectorCount = 4;
+constexpr uint32_t kCameraStack = 0x20;
+constexpr uint32_t kCameraStackStep = 8;
+constexpr uint32_t kCameraStackTop = 0x60;  // index, -1 empty
+constexpr int kCameraStackSize = 8;
+
+// the vtable a scene camera's link points at
+constexpr uint32_t kSceneCameras[] = {
+    0x6D2B74,  // a sequence's camera track (0x409210)
+    0x69F0A0,  // AnimCameraInfo
+    0x69F140,  // BoneBoundCameraInfo
+    0x69F3E4,  // FixedCameraInfo
+    0x69F4F0,  // FollowCameraInfo
+    0x69F558,  // a FollowCameraInfo kind (0xBD410)
+};
+
 // the line test the crosshair target test makes, from the world [0x778E28] vtable +8
 constexpr uint32_t kCollision = 0x778E28;
 constexpr uint32_t kCollisionWorld = 8;
@@ -132,6 +155,26 @@ bool IsGun(X86Context& ctx, uint32_t item) {
 
 bool CutscenePlaying() { return G<uint8_t>(kCutscenePlaying) != 0; }
 
+bool SceneCamera(uint32_t link) {
+    if (!link || link == kLinkOffset) return false;
+    return std::ranges::find(kSceneCameras, R32(link)) != std::end(kSceneCameras);
+}
+
+// the player's view is a scene the level shows, the player still in control
+bool SceneShown(uint32_t player) {
+    uint32_t views = R32(kCameraManager);
+    if (!views) return false;
+    if (R32(views + kViewsShared)) return true;
+    uint32_t port = R32(player + kPlayerPort);
+    if (port >= kDirectorCount) return false;
+    uint32_t director = R32(views + kViewDirectors) + port * kDirectorBytes;
+    int top = std::min(int(R32(director + kCameraStackTop)), kCameraStackSize - 1);
+    for (int i = 0; i <= top; i++) {
+        if (SceneCamera(R32(director + kCameraStack + uint32_t(i) * kCameraStackStep))) return true;
+    }
+    return false;
+}
+
 // the keyboard's port with it used last takes the mouse setting, a controller its own
 bool FreeAimOn(uint32_t player) {
     if (!player || R32(player) != kPlayerVtable) return false;
@@ -140,7 +183,7 @@ bool FreeAimOn(uint32_t player) {
 }
 
 bool FreeAimGun(X86Context& ctx, uint32_t player, uint32_t gun) {
-    if (!gun || CutscenePlaying() || !FreeAimOn(player)) return false;
+    if (!gun || CutscenePlaying() || !FreeAimOn(player) || SceneShown(player)) return false;
     return !(R32(gun + kGunFlags) & kGunAimsAsThrown) && IsGun(ctx, gun);
 }
 
@@ -150,7 +193,7 @@ bool InFreeAim(uint32_t player) {
     uint32_t now = R32(kFrameCount);
     bool aiming = player == g_player && now - g_frame <= 1;
     bool firing = player == g_firing_player && now - g_firing_frame <= 1;
-    return aiming || firing;
+    return (aiming || firing) && !SceneShown(player);
 }
 
 // focus targets take a hit only from a shooter in focus lock: lends it to a free aim shooter, returns them or 0
