@@ -935,9 +935,10 @@ private:
     void FillPipelineDesc(const PsoKey& k, ID3DBlob* vs, ID3DBlob* ps, D3D12_GRAPHICS_PIPELINE_STATE_DESC& d) const;
     void ExpandPoints(D3D12_GRAPHICS_PIPELINE_STATE_DESC& d);
     float PointScale() const;  // host pixels per console pixel of the bound target
+    float RenderTargetShift(const State& s, const DrawShaders& sh) const;
     void UploadConstants(const State& s, const DrawShaders& sh, const PsoKey& k, const DrawTextures& stages,
                          GuestExtent size, DrawConstants& c);
-    void FillTextureConstants(const State& s, const DrawTextures& stages, DrawConstants& c);
+    void FillTextureConstants(const State& s, const DrawShaders& sh, const DrawTextures& stages, DrawConstants& c);
     void FillTexelConstants(int i, const TextureDesc& d, const DrawTextures& stages, DrawConstants& c);
     void CaptureDraw(const State& s, uint32_t prim, uint32_t count, const PsoKey& k, const DrawConstants& c,
                      const DrawTextures& stages);
@@ -2166,6 +2167,13 @@ float D3D12Backend::PointScale() const {
     return float(t->w) / float(t->gw);
 }
 
+// the XDK's screen space offset puts the console's positions half a pixel right and down of the host's, unless a
+// program writes them without c-37; render target reads move back that far (TexUv)
+float D3D12Backend::RenderTargetShift(const State& s, const DrawShaders& sh) const {
+    bool offset = !sh.prog || ReadsViewportOffset(s.vs->program);
+    return offset ? -0.5f * PointScale() : 0.0f;
+}
+
 void D3D12Backend::TakeBuilt() {
     std::lock_guard lock(built_lock_);
     built_ready_ = false;
@@ -2304,6 +2312,7 @@ ID3D12Resource* D3D12Backend::BindTargetTexture(const State& s, int stage, const
     if (&t == draw_ds_) return nullptr;
     bool feedback = &t == draw_rt_;
     stages.rt[stage] = true;
+    info.flags |= kTexTarget;
     if (!t.depth && LatchCpuWrite(t)) {
         Surface su;
         su.header = s.textures[size_t(stage)];
@@ -2927,11 +2936,8 @@ constexpr float kGlowBoxTexels = 3.0f;  // console texels across the box each wi
 void D3D12Backend::FillTexelConstants(int i, const TextureDesc& d, const DrawTextures& stages, DrawConstants& c) {
     c.texsize[i][0] = float(d.width);
     c.texsize[i][1] = float(d.height);
-    // the console samples pixels at integer positions, D3D12 half a pixel on: targets are read half a texel back
     if (!stages.rt[i]) return;
     float k = stages.k[i];
-    c.texsize[i][2] = -0.5f / (float(d.width) * k);
-    c.texsize[i][3] = -0.5f / (float(d.height) * k);
     // a 3 console texel box per tap keeps the console chain's glow width and brightness
     if (stages.wide[i] > 0) {
         float n = std::ceil(kGlowBoxTexels * stages.wide[i] * 0.5f);
@@ -2941,10 +2947,12 @@ void D3D12Backend::FillTexelConstants(int i, const TextureDesc& d, const DrawTex
     }
 }
 
-void D3D12Backend::FillTextureConstants(const State& s, const DrawTextures& stages, DrawConstants& c) {
+void D3D12Backend::FillTextureConstants(const State& s, const DrawShaders& sh, const DrawTextures& stages,
+                                        DrawConstants& c) {
     for (int i = 0; i < 4; i++) {
         TextureDesc d;
         if (s.textures[size_t(i)] && Describe(s.textures[size_t(i)], d)) FillTexelConstants(i, d, stages, c);
+        if (stages.rt[i]) c.rtshift[i] = RenderTargetShift(s, sh);
         const auto& t = s.tss[size_t(i)];
         c.bump[i][0] = Bits(t[kTssBumpEnvMat00]);
         c.bump[i][1] = Bits(t[kTssBumpEnvMat01]);
@@ -3080,7 +3088,7 @@ void D3D12Backend::UploadConstants(const State& s, const DrawShaders& sh, const 
     FillCombinerConstants(s, c);
     if (ext_) ext_->Constants(reinterpret_cast<float(*)[4]>(vc.cpu), c.ext, bound_rt_, k.blend ? k.src : 1);
     if (stages.info[0].flags & kTexAtlasClamp) std::memcpy(c.ext, stages.atlas, sizeof(c.ext));
-    FillTextureConstants(s, stages, c);
+    FillTextureConstants(s, sh, stages, c);
     if (sh.fixed_transform) {
         FillTransformConstants(s, c);
         FillLightConstants(s, sh.fk, c);
