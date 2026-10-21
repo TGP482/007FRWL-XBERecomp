@@ -94,7 +94,6 @@ constexpr Entry kEntries[] = {
     {"INVERT LOOK", {u"Inverser la visée", u"Blick umkehren", u"Inverti visuale", u"Invertir vista"}},
     {"CAMERA CENTRING", {u"Recentrage de la caméra", u"Kamerazentrierung", u"Centratura visuale", u"Centrado de cámara"}},
     {"FREE AIM", {u"Visée libre", u"Freies Zielen", u"Mira libera", u"Apuntado libre"}},
-    {"WALK SPEED", {u"Vitesse de marche", u"Gehgeschwindigkeit", u"Velocità di camminata", u"Velocidad al caminar"}},
     {"MOVE FORWARD", {u"Avancer", u"Vorwärts bewegen", u"Avanti", u"Avanzar"}},
     {"MOVE BACK", {u"Reculer", u"Rückwärts bewegen", u"Indietro", u"Retroceder"}},
     {"STRAFE LEFT", {u"Pas latéral à gauche", u"Seitwärts nach links", u"Spostamento laterale a sinistra", u"Desplazamiento lateral a la izquierda"}},

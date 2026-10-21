@@ -41,7 +41,6 @@ struct Options {
     uint32_t draw_distance = 1;  // LOD and object distance multiplier, 1 the game's
     uint32_t fov = 65;  // horizontal degrees on a 4:3 frame, 65 is the game's
     uint32_t fmv_scale = 0;  // 4:3 films on a wider screen: 0 fill it, top and bottom cut; 1 kept 4:3
-    uint32_t walk_speed = 50;  // percent of a full stick the walk key moves at
     std::string monitor;  // its device name, \\.\DISPLAY2; empty the primary
     bool pause_on_focus_loss = true;  // the game and its sound stop while the window is in the background
     bool async_shaders = true;  // a draw whose pipeline needs compiling is skipped until the build threads have it

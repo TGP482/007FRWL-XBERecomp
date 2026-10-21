@@ -123,11 +123,6 @@ constexpr int kRenderMax = 200;
 constexpr int kRenderStep = 5;
 constexpr int kRenderSlots = (kRenderMax - kRenderMin) / kRenderStep + 1;
 
-constexpr int kWalkMin = 10;
-constexpr int kWalkMax = 100;
-constexpr int kWalkStep = 5;
-constexpr int kWalkSlots = (kWalkMax - kWalkMin) / kWalkStep + 1;
-
 constexpr int kVolumeMax = 100;  // percent
 constexpr int kVolumeStep = 5;
 constexpr int kVolumeSlots = kVolumeMax / kVolumeStep + 1;
@@ -481,16 +476,6 @@ std::string StepFieldOfView(Settings&, int step) {
     return fov == kGameFov ? text + " (DEFAULT)" : text;
 }
 
-std::string StepWalkSpeed(Settings&, int step) {
-    uint32_t& speed = game::Opt().walk_speed;
-    if (step) {
-        int percent = std::clamp(int(speed), kWalkMin, kWalkMax);
-        int slot = StepIndex((percent - kWalkMin) / kWalkStep, step, kWalkSlots);
-        speed = uint32_t(kWalkMin + kWalkStep * slot);
-    }
-    return std::to_string(speed) + "%";
-}
-
 // INPUT DEVICES: what each player port has plugged in. A step goes to the next choice whose devices no other
 // player has; player 1 never has none, since single player is driven from port 1.
 constexpr game::PlayerPort kPortChoices[] = {{false, -1}, {true, 0},  {true, 1},  {true, 2},  {true, 3},
@@ -568,7 +553,6 @@ enum RowId {
     kSmaaRow,
     kFieldOfViewRow,
     kFmvScaleRow,
-    kWalkSpeedRow,
     kMonitorRow,
     kPauseOnFocusLossRow,
     kSkippableCutscenesRow,
@@ -608,7 +592,6 @@ constexpr StepFn kSteps[] = {
     StepSmaa,
     StepFieldOfView,
     StepFmvScale,
-    StepWalkSpeed,
     StepMonitor,
     StepPauseOnFocusLoss,
     StepSkippableCutscenes,
@@ -686,15 +669,13 @@ const std::vector<Row>& InputRows() {
         std::span<const input::Action> actions = input::Actions();
         const char* section = nullptr;
         for (size_t i = 0; i < actions.size(); i++) {
-            // the on foot keys end with the walk speed, then each section under its heading
+            // the on foot keys, then each section under its heading
             if (actions[i].section != section) {
-                if (!section) out.push_back({Kind::Value, kWalkSpeedRow, "WALK SPEED"});
                 section = actions[i].section;
                 out.push_back({Kind::Heading, -1, section});
             }
             out.push_back({Kind::Bind, int(i), actions[i].label});
         }
-        if (!section) out.push_back({Kind::Value, kWalkSpeedRow, "WALK SPEED"});
         return out;
     }();
     return list;
@@ -1081,7 +1062,6 @@ void RestoreDefaults(int page) {
         options.invert_mouse = defaults.invert_mouse;
         options.camera_centring = defaults.camera_centring;
         options.free_aim = defaults.free_aim;
-        options.walk_speed = defaults.walk_speed;
         input::ResetBindings();
     }
 }

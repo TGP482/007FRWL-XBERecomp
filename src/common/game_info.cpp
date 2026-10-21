@@ -285,7 +285,6 @@ const app::GameInfo app::kGame = {
         {"smaa", &game::Opt().smaa, nullptr},
         {"fov", nullptr, &game::Opt().fov},
         {"fmv_scale", nullptr, &game::Opt().fmv_scale},
-        {"walk_speed", nullptr, &game::Opt().walk_speed},
         {"pause_on_focus_loss", &game::Opt().pause_on_focus_loss, nullptr},
         {"async_shaders", &game::Opt().async_shaders, nullptr},
     },

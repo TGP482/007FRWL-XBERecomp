@@ -152,7 +152,7 @@ constexpr size_t kPauseAction = PauseActionIndex();
 
 constexpr uint8_t kFullPress = 0xFF;
 constexpr int16_t kFullStick = 32767;
-constexpr float kPercent = 100.0f;
+constexpr float kWalkStick = 0.4f;  // share of a full stick the walk key moves at
 constexpr uint64_t kCaptureGuardMs = 250;  // the panel key waits this long after a key capture poll
 constexpr size_t kMaxKeysPerAction = 2;
 constexpr uint64_t kPlayMs = 250;  // play is the look hook asking for the mouse this recently
@@ -589,7 +589,7 @@ void SetSlot(std::vector<int>& keys, int vk, int slot) {
 int Axis(bool positive, bool negative) { return int(positive) - int(negative); }
 
 void SetSticks(Pad& pad, const StickKeys& sticks) {
-    float move = sticks.walk ? float(game::Opt().walk_speed) / kPercent : 1.0f;
+    float move = sticks.walk ? kWalkStick : 1.0f;
     if (int x = Axis(sticks.move[kRight], sticks.move[kLeft])) pad.lx = int16_t(float(x) * move * kFullStick);
     if (int y = Axis(sticks.move[kForward], sticks.move[kBackward])) pad.ly = int16_t(float(y) * move * kFullStick);
     if (int x = Axis(sticks.look[kLookRight], sticks.look[kLookLeft])) pad.rx = int16_t(x * kFullStick);
