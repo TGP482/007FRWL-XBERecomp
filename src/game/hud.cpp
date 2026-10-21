@@ -56,6 +56,10 @@ constexpr uint32_t kFmvFill = 0;  // fmv_scale
 constexpr uint32_t kQuadFilmWidth = 0x20;
 constexpr float kMenuFilmWidth = 512;
 
+// the film player; +4 its open film, cleared when the film stops (0x362900)
+constexpr uint32_t kFilmPlayer = 0x77F954;
+constexpr uint32_t kPlayerFilm = 0x04;
+
 // letterbox bar of each letterboxed film, in film rows top and bottom alike, measured from the disc's films
 struct Letterbox {
     const char* name;
@@ -190,10 +194,12 @@ void HudAnchorLeft(bool on) { g_anchor = on && game::Wide() ? kLeft : kOff; }
 void HudAnchorRight(bool on) { g_anchor = on && game::Wide() ? kRight : kOff; }
 void HudAnchorCentre(bool on) { g_anchor = on && game::Wide() ? kCentre : kOff; }
 
-// the front end's film drew lately; a film loop restarting can skip a frame
+// the front end's film is still open and drew lately; a film loop restarting can skip a frame
 bool InFrontEnd() {
     constexpr auto kRecent = std::chrono::milliseconds(500);
-    return std::chrono::steady_clock::now() - g_menu_film_shown < kRecent;
+    uint32_t player = R32(kFilmPlayer);
+    bool open = player && R32(player + kPlayerFilm);
+    return open && std::chrono::steady_clock::now() - g_menu_film_shown < kRecent;
 }
 
 // tree walk 0x3583B0, before a widget's Draw: esi the widget, [esp] its screen position
