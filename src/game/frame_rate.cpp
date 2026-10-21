@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <unordered_map>
 
 #include "common/options.h"
 #include "xdk/hle.h"
@@ -68,6 +69,15 @@ constexpr uint32_t kWorldTau = 0x164;
 constexpr uint32_t kWorldContactTau = 0x16C;
 constexpr uint32_t kStepInfo = 4;                    // from esp: seconds, then 1 / seconds
 constexpr float kConsoleStepSeconds = 1.0f / 60.0f;  // the world steps twice a frame (0x2101B0), at 30 fps 1/60 s
+
+// helicopter brain: its helicopter, 0x20 into the object, whose weapons answer at object +0x1F8
+constexpr uint32_t kBrainHelicopter = 0x4C;
+constexpr uint32_t kHelicopterWeapons = 0x1F8 - 0x20;
+constexpr uint32_t kFireArgs = 2;
+constexpr uint32_t kConsoleFrameMs = 34;  // 1/30 s, rounded up
+
+// game ms until which each helicopter's weapons hold fire
+std::unordered_map<uint32_t, uint32_t> g_fire_held_until;
 
 float FrameShare() { return float(kernel::G<float>(kGameSeconds) / kConsoleFrameSeconds); }
 
@@ -165,4 +175,26 @@ X86_FUNC(sub_0028BBD0) {
     __imp__sub_0028BBD0(ctx, base);
     G<float>(world + kWorldTau) = tau;
     G<float>(world + kWorldContactTau) = contact_tau;
+}
+
+// helicopter brain behaviour 0x1AD160, thiscall (behaviour, arg). The London script turns the helicopter on Bond and
+// hands it the tables about 17 ms later, within one console frame; at high frame rates it fired at Bond in between
+X86_EXTERN_FUNC(__imp__sub_0001D841);
+X86_FUNC(sub_0001D841) {
+    using namespace kernel;
+    uint32_t weapons = R32(ctx.ecx + kBrainHelicopter) + kHelicopterWeapons;
+    g_fire_held_until[weapons] = R32(kGameMs) + kConsoleFrameMs;
+    __imp__sub_0001D841(ctx, base);
+}
+
+// air vehicle fire 0x166060, thiscall (target, weapon mask): fired anything
+X86_EXTERN_FUNC(__imp__sub_0001E219);
+X86_FUNC(sub_0001E219) {
+    using namespace kernel;
+    auto held = g_fire_held_until.find(ctx.ecx);
+    if (held != g_fire_held_until.end() && R32(kGameMs) < held->second) {
+        Return(ctx, 0, kFireArgs);
+        return;
+    }
+    __imp__sub_0001E219(ctx, base);
 }
