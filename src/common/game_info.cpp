@@ -28,6 +28,8 @@ void TakeCutsceneSkip(int port, input::Pad& pad);  // cutscenes.cpp
 
 namespace game {
 
+bool g_fps_cap_saved = false;  // Load only runs when the settings file exists
+
 namespace {
 
 constexpr intptr_t kKeyWasDown = 1 << 30;  // bit 30 of a key message's lparam: a repeat
@@ -218,7 +220,7 @@ void Load(const void* table) {
     float sensitivity = float(settings["mouse_sensitivity"].value_or(double(options.mouse_sensitivity)));
     if (std::isfinite(sensitivity)) options.mouse_sensitivity = sensitivity;
     options.monitor = settings["monitor"].value_or(options.monitor);
-    if (!settings.contains("fps_cap")) app::Get().fps_cap = app::kFpsCapRefresh;
+    g_fps_cap_saved = settings.contains("fps_cap");
     LoadNames(settings, "keys", options.keys);
     LoadNames(settings, "pad_buttons", options.pad_buttons);
     LoadPlayers(settings, options.players);
@@ -235,6 +237,7 @@ void Save(void* table) {
 }
 
 void Init() {
+    if (!g_fps_cap_saved) app::Get().fps_cap = app::kFpsCapRefresh;
     input::LoadBindings();
     input::LoadPadBindings();
     audio::SetOutputMode(Opt().audio_output);
