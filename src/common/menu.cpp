@@ -731,6 +731,7 @@ void RestoreSettingsDefaults() {
     Settings& s = Get();
     std::string join_ip = s.join_ip;
     s = Settings{};
+    s.fps_cap = kFpsCapRefresh;
     s.join_ip = join_ip;
     g_display_held = false;
     ApplyDisplay();

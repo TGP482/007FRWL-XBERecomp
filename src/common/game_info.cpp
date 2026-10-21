@@ -218,6 +218,7 @@ void Load(const void* table) {
     float sensitivity = float(settings["mouse_sensitivity"].value_or(double(options.mouse_sensitivity)));
     if (std::isfinite(sensitivity)) options.mouse_sensitivity = sensitivity;
     options.monitor = settings["monitor"].value_or(options.monitor);
+    if (!settings.contains("fps_cap")) app::Get().fps_cap = app::kFpsCapRefresh;
     LoadNames(settings, "keys", options.keys);
     LoadNames(settings, "pad_buttons", options.pad_buttons);
     LoadPlayers(settings, options.players);
