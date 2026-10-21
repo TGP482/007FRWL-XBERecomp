@@ -339,15 +339,18 @@ float4 psmain() : SV_Target { return colour; }
 // The sky writes no depth and stays at the clear: a pixel's samples there span less than one pixel and it stays lit
 const char* kAoHlsl = R"(
 cbuffer A : register(b1) { float4 proj; float4 zp; float4 vp; float4 opt; float4 fog; float4 fogcolor; };
-// stencil bit 7: a blended or alpha tested surface wrote the depth last, it counts as the far plane like the sky
+// stencil bit 7: a blended or alpha tested surface wrote the depth last, it counts as the far plane like the sky.
+// Bit 6: a character, left unoccluded itself but still occluding what is behind it
 #ifdef MS
 Texture2DMS<float> depth : register(t0);
 Texture2DMS<uint2> stencil : register(t2);
 float Raw(int2 p) { return stencil.Load(p, 0).g & 0x80 ? 1 : depth.Load(p, 0); }
+bool Character(float2 px) { return stencil.Load(int2(px), 0).g & 0x40; }
 #else
 Texture2D<float> depth : register(t0);
 Texture2D<uint2> stencil : register(t2);
 float Raw(int2 p) { return stencil.Load(int3(p, 0)).g & 0x80 ? 1 : depth.Load(int3(p, 0)); }
+bool Character(float2 px) { return stencil.Load(int3(px, 0)).g & 0x40; }
 #endif
 Texture2D<float2> ao : register(t1);
 float4 vs(uint id : SV_VertexID) : SV_Position {
@@ -377,7 +380,7 @@ float2 occlusion(float4 pos : SV_Position) : SV_Target {
     float3 c = View(pos.xy);
     float2 rad = opt.x * 0.5 * vp.zw / (proj.xy * c.z);
     float span = max(rad.x, rad.y);
-    if (span < 1) return float2(1, c.z);
+    if (span < 1 || Character(pos.xy)) return float2(1, c.z);
     float3 n = Normal(pos.xy, c);
     float k = min(1, opt.y / span);
     float R = opt.x * k;
@@ -402,7 +405,7 @@ float2 gtao(float4 pos : SV_Position) : SV_Target {
     float3 c = View(pos.xy);
     float2 rad = opt.x * 0.5 * vp.zw / (proj.xy * c.z);
     float span = max(rad.x, rad.y);
-    if (span < 1) return float2(1, c.z);
+    if (span < 1 || Character(pos.xy)) return float2(1, c.z);
     float3 n = Normal(pos.xy, c);
     float3 v = normalize(-c);
     float k = min(1, opt.y / span);
@@ -923,6 +926,7 @@ private:
     void BuildPipelineKey(const State& s, const Assembled& a, uint64_t vh, uint64_t ph, PsoKey& k);
     void KeyDepthStencil(const State& s, const Assembled& a, PsoKey& k);
     bool MarksOcclusion(const PsoKey& k) const;
+    uint32_t OcclusionMark(const State& s, const PsoKey& k) const;
     void ApplyOverlayBias(const DrawShaders& sh, PsoKey& k) const;
     ID3D12PipelineState* EnsurePipeline(const PsoKey& k, bool wait);
     void TakeBuilt();
@@ -1158,6 +1162,7 @@ private:
     uint32_t ao_w_ = 0;
     uint32_t ao_h_ = 0;
     uint64_t ao_frame_ = 0;  // presents_ plus one when the pass last ran, 0 before it ever did
+    bool characters_ = false;  // draws between the game's character marks
     Extension* ext_ = nullptr;
     // one frame capture: every draw in a text file, each target as the frame leaves it, the textures it read
     FILE* cap_ = nullptr;
@@ -2779,8 +2784,10 @@ void KeyBlend(const State& s, PsoKey& k) {
 
 constexpr float kDepth24Max = 16777215.0f;  // 2^24 minus 1: a 24 bit depth buffer's units per 1.0
 
-// stencil bit 7 marks a blended or alpha tested surface for the occlusion pass; the game never tests stencil
+// stencil bit 7 marks a blended or alpha tested surface for the occlusion pass, bit 6 a character; the game never
+// tests stencil
 constexpr uint32_t kAoStencilBit = 0x80;
+constexpr uint32_t kAoCharacterBit = 0x40;
 constexpr uint32_t kStencilAlways = 0x207;    // D3DCMP_ALWAYS
 constexpr uint32_t kStencilKeep = 0x1E00;     // D3DSTENCILOP_KEEP
 constexpr uint32_t kStencilReplace = 0x1E01;  // D3DSTENCILOP_REPLACE
@@ -2795,7 +2802,7 @@ void KeyOcclusionMark(PsoKey& k) {
     k.ao_mark = 1;
     k.sten = 1;
     k.sfunc = kStencilAlways;
-    k.swmask = kAoStencilBit;
+    k.swmask = kAoStencilBit | kAoCharacterBit;
     k.sfail = kStencilKeep;
     k.szfail = kStencilKeep;
     k.spass = kStencilReplace;
@@ -3428,13 +3435,18 @@ void D3D12Backend::SetViewportScissor(const State& s, uint32_t gw) {
     cl_->RSSetScissorRects(1, &rect);
 }
 
+uint32_t D3D12Backend::OcclusionMark(const State& s, const PsoKey& k) const {
+    if (Translucent(s, k)) return kAoStencilBit;
+    return characters_ ? kAoCharacterBit : 0;
+}
+
 void D3D12Backend::SetBlendFactorStencilRef(const State& s, const PsoKey& k) {
     float bf[4];
     Color(SimpleState(s, kMBlendColor), bf);
     if (k.blend && (UsesConstantAlpha(k.src) || UsesConstantAlpha(k.dst))) std::fill(bf, bf + 3, bf[3]);
     cl_->OMSetBlendFactor(bf);
     uint32_t ref = SimpleState(s, kMStencilRef) & 0xFF;
-    if (k.ao_mark) ref = Translucent(s, k) ? kAoStencilBit : 0;
+    if (k.ao_mark) ref = OcclusionMark(s, k);
     cl_->OMSetStencilRef(ref);
 }
 
@@ -3768,6 +3780,10 @@ void D3D12Backend::Clear(const State& s, uint32_t count, const uint8_t* rects, u
         float p[4 * kOcclusionRects];
         std::memcpy(p, rects, sizeof(p));
         Occlusion(s, p);
+        return;
+    }
+    if (flags & kClearCharacters) {
+        characters_ = stencil != 0;
         return;
     }
     PerfScope perf_clear{g_perf.clear};

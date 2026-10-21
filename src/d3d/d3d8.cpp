@@ -314,6 +314,11 @@ void Occlusion(bool gtao) {
     g_backend->Clear(g_state, gpu::kOcclusionRects, rects, gpu::kClearOcclusion, 0, 0, 0);
 }
 
+void MarkCharacters(bool on) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    if (g_backend) g_backend->Clear(g_state, 0, nullptr, gpu::kClearCharacters, 0, 0, on ? 1 : 0);
+}
+
 }  // namespace d3d
 
 using namespace d3d;

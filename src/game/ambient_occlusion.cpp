@@ -24,3 +24,12 @@ void AmbientOcclusion(X86Context& ctx, uint8_t*) {
     if (R32(ctx.esp + kLoopReturn) != kSceneDraw || R32(ctx.esp + kRenderPass) != 0) return;
     d3d::Occlusion(mode == 2);
 }
+
+// skinned atomic render: every character, kept out of ambient occlusion so their low poly corners stay lit
+X86_EXTERN_FUNC(__imp__sub_00464120);
+X86_FUNC(sub_00464120) {
+    bool marked = game::Opt().ambient_occlusion != 0;
+    if (marked) d3d::MarkCharacters(true);
+    __imp__sub_00464120(ctx, base);
+    if (marked) d3d::MarkCharacters(false);
+}
