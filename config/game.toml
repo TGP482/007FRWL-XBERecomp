@@ -485,6 +485,12 @@ at = 0x358423
 call = "HudWidgetShown"
 on_false = 0x358426
 
+# HUD meters, the armour outline's vehicle test (flag 0x1C): skipped, the outline follows the armour meter
+[[hook]]
+at = 0xE47BE
+call = "OutlineIgnoresVehicle"
+on_true = 0xE47CF
+
 # enemy death done, after the corpse leaves the collision: persistent bodies skip the fades that delete the body
 [[hook]]
 at = 0x46D82

@@ -221,6 +221,10 @@ bool HudWidgetShown(X86Context& ctx, uint8_t*) {
     return false;
 }
 
+// HUD meters, before the armour outline's vehicle test (player flag 0x1C, 0xE47BE): skipped. Climbing out of a
+// vehicle Bond's armour is shown before the flag clears; a vehicle's own meters have no armour, which hides it anyway
+bool OutlineIgnoresVehicle(X86Context&, uint8_t*) { return true; }
+
 // around the Flash player's render, 0x412F1F
 void MenuDrawBegin(X86Context&, uint8_t*) {
     if (!game::Wide()) return;
