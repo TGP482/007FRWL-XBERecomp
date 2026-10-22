@@ -95,8 +95,3 @@ Install [Visual Studio 2022](https://visualstudio.microsoft.com/downloads/) and 
 ### 4. Build the Project
 - Run `build.bat`. The first build recompiles the entire game and can take 30 to 90 minutes on weaker systems.
 - When it finishes, run `out\build\release\007FRWL.exe`.
-
-## Credits
-- [XboxXBE-Recomp](https://github.com/TGP482/XboxXBE-Recomp), the recompiler and runtime this is built on.
-- [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) for the overridable function layout and instruction hooks.
-- [Zydis](https://github.com/zyantific/zydis) for decoding x86 instructions, [toml++](https://github.com/marzer/tomlplusplus) for the configs, [Dear ImGui](https://github.com/ocornut/imgui) for the settings overlay and [SDL](https://github.com/libsdl-org/SDL) for the window, input and controllers.
