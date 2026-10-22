@@ -62,19 +62,19 @@ struct Capture {
 Capture g_capture;
 int g_hovered_box = -1;  // the box under the mouse or focused with a key in it, this frame
 
-// the game's own menus: grey text, the gold of a selected item and its popup's frame, black popup, steel plates
-constexpr ImVec4 kPanelBg{0.03f, 0.03f, 0.03f, 0.94f};
-constexpr ImVec4 kBorder{0.85f, 0.65f, 0.09f, 0.85f};
+// the game's own menus: grey text, the red of a selected button, blue steel plates, steel frame
+constexpr ImVec4 kPanelBg{0.04f, 0.05f, 0.07f, 0.94f};
+constexpr ImVec4 kBorder{0.48f, 0.49f, 0.50f, 0.90f};
 constexpr ImVec4 kText{0.80f, 0.80f, 0.80f, 1.0f};
-constexpr ImVec4 kHighlight{0.25f, 0.19f, 0.03f, 1.0f};  // the selected gold at a quarter over the popup black
-constexpr ImVec4 kHeading{0.91f, 0.67f, 0.02f, 1.0f};
-constexpr ImVec4 kDim{0.58f, 0.59f, 0.58f, 1.0f};
-constexpr ImVec4 kField{0.18f, 0.18f, 0.18f, 1.0f};
-constexpr ImVec4 kFieldHovered{0.25f, 0.25f, 0.25f, 1.0f};
-constexpr ImVec4 kButton{0.19f, 0.20f, 0.22f, 1.0f};
+constexpr ImVec4 kHighlight{0.40f, 0.05f, 0.05f, 1.0f};  // the selected button red
+constexpr ImVec4 kHeading{0.86f, 0.20f, 0.14f, 1.0f};
+constexpr ImVec4 kDim{0.58f, 0.60f, 0.64f, 1.0f};
+constexpr ImVec4 kField{0.15f, 0.18f, 0.22f, 1.0f};
+constexpr ImVec4 kFieldHovered{0.22f, 0.27f, 0.33f, 1.0f};
+constexpr ImVec4 kButton{0.28f, 0.34f, 0.41f, 1.0f};  // the blue plate
 // lighter than the highlight, so it shows on a selected row
-constexpr ImVec4 kButtonHovered{0.38f, 0.29f, 0.03f, 1.0f};
-constexpr ImVec4 kLine{0.91f, 0.67f, 0.02f, 0.35f};
+constexpr ImVec4 kButtonHovered{0.61f, 0.09f, 0.08f, 1.0f};
+constexpr ImVec4 kLine{0.86f, 0.20f, 0.14f, 0.35f};
 
 constexpr std::pair<ImGuiCol, ImVec4> kPanelColors[] = {
     {ImGuiCol_WindowBg, kPanelBg},
