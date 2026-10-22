@@ -22,6 +22,8 @@ constexpr uint32_t kPlayersCount = 0x0C;
 constexpr uint32_t kOwnerObject = 0x08;
 constexpr uint32_t kPlayerVtable = 0x6A3D00;
 constexpr uint32_t kCurrentGun = 0x20311;  // thiscall on the player, the item in hand or 0
+constexpr uint32_t kPlayerFlags = 0x5E4;
+constexpr uint32_t kFlagReloading = 0x10;  // set while the reload state runs, cleared when it ends
 
 // interface queries, thiscall vtable +0x14 (name, object out) with the names' pointers
 constexpr uint32_t kQuerySlot = 0x14;
@@ -120,6 +122,8 @@ bool SwapAmmo(X86Context& ctx, uint32_t gun) {
     return true;
 }
 
+bool Reloading(uint32_t player) { return (R32(player + kPlayerFlags) & kFlagReloading) != 0; }
+
 bool InPlay() { return R32(kGameMode) == kModeRunning && !G<uint8_t>(kCutscenePlaying); }
 
 }  // namespace
@@ -127,11 +131,11 @@ bool InPlay() { return R32(kGameMode) == kModeRunning && !G<uint8_t>(kCutscenePl
 // each input update, with the switch ammo key pressed in this one
 void UpdateAmmoSwap(X86Context& ctx, bool pressed) {
     if (g_reload_wait > 0) g_reload_wait--;
-    if (!pressed || !InPlay()) return;
+    if (!pressed || !InPlay() || g_reload_wait > 0) return;
     X86Context saved = ctx;
     int port = input::KeyboardPort();
     uint32_t player = PortPlayer(ctx, port);
-    uint32_t gun = player ? HeldGun(ctx, player) : 0;
+    uint32_t gun = player && !Reloading(player) ? HeldGun(ctx, player) : 0;
     bool swapped = gun && SwapAmmo(ctx, gun);
     ctx = saved;
     if (!swapped) return;
