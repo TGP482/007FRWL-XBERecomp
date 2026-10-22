@@ -12,6 +12,7 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 - Place your game files in the `assets` folder. This can be an ISO, or the extracted data files, of the USA or Europe release.
 - Run `007FRWL.exe`. The first start compiles the game's code for your PC, this only happens once.
 - Recomp Settings can be adjusted in the in-game options menu while the game is running, or through the Settings overlay, which is opened with <kbd>F10</kbd> by default.
+<img width="1920" height="1080" alt="{B220DCA8-B044-4B0D-B78B-53E377DA8C56}" src="https://github.com/user-attachments/assets/363e9317-6e84-47c4-882f-de36724157ce" />
 
 ## Features
 ### Display
