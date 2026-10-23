@@ -441,9 +441,11 @@ std::optional<RowItem> RowItemOf(X86Context& ctx, const LegendClip& legend) {
     return RowItem{&legend, left, share->second * (field.right - field.left) * scale};
 }
 
-// a row is the legends of one parent on one line
-using RowKey = std::pair<uint32_t, long>;
-RowKey RowOf(uint32_t clip) { return {R32(clip + kClipParent), std::lround(G<float>(clip + kMatrixTy))}; }
+// a row is the legends of one parent on one line; the inventory sets its Equip legend 6 units below the others
+constexpr float kRowTolerance = 8.0f;
+
+uint32_t ParentOf(const LegendClip& legend) { return R32(legend.clip + kClipParent); }
+float LineOf(const LegendClip& legend) { return G<float>(legend.clip + kMatrixTy); }
 
 constexpr float kBackgroundShare = 0.9f;  // a sibling this share of the page wide is the page's backdrop, not a bar
 
@@ -509,11 +511,23 @@ void LayOutRow(X86Context& ctx, const std::vector<LegendClip>& row) {
 }
 
 void LayOutLegends(X86Context& ctx) {
-    std::map<RowKey, std::vector<LegendClip>> rows;
-    for (const LegendClip& legend : g_legends.clips) rows[RowOf(legend.clip)].push_back(legend);
-    for (const auto& [key, row] : rows) {
+    std::vector<LegendClip> sorted = g_legends.clips;
+    std::sort(sorted.begin(), sorted.end(), [](const LegendClip& a, const LegendClip& b) {
+        if (ParentOf(a) != ParentOf(b)) return ParentOf(a) < ParentOf(b);
+        return LineOf(a) < LineOf(b);
+    });
+    std::vector<LegendClip> row;
+    auto finish = [&] {
         if (row.size() > 1) LayOutRow(ctx, row);
+        row.clear();
+    };
+    for (const LegendClip& legend : sorted) {
+        bool same_row = !row.empty() && ParentOf(legend) == ParentOf(row.front());
+        if (same_row && LineOf(legend) - LineOf(row.front()) > kRowTolerance) same_row = false;
+        if (!same_row) finish();
+        row.push_back(legend);
     }
+    finish();
 }
 
 // unnamed clips have no name string
