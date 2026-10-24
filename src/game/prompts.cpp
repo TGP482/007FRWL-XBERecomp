@@ -116,6 +116,7 @@ struct Swap {
 };
 constexpr Swap kPcWording[] = {
     {"Xbox console", "PC"},
+    {"Xbox\xA0" "console", "PC"},  
     {"Your Xbox", "Your PC"},
     {"Xbox hard disk", "hard disk"},
     {"free blocks", "free space"},
