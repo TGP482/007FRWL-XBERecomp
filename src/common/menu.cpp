@@ -109,6 +109,9 @@ const char* const kSkipPopupNames[] = {"OFF", "OBJECTIVES", "TIPS", "ALL"};
 constexpr uint32_t kFmvScales[] = {0, 1};
 const char* const kFmvScaleNames[] = {"FILL", "4:3"};
 
+constexpr uint32_t kDumpFormats[] = {0, 1};
+const char* const kDumpFormatNames[] = {"PNG", "DDS"};
+
 constexpr uint32_t kColourBlindModes[] = {0, 1, 2, 3};
 const char* const kColourBlindNames[] = {"OFF", "PROTANOPIA", "DEUTERANOPIA", "TRITANOPIA"};
 constexpr uint32_t kAudioOutputs[] = {audio::kOutputAuto, audio::kOutputMono, audio::kOutputStereo,
@@ -305,6 +308,20 @@ std::string StepRenderResolution(Settings& s, int step) {
     std::string size = std::to_string(out.width * s.render_percent / 100) + "x";
     size += std::to_string(out.height * s.render_percent / 100);
     return std::to_string(s.render_percent) + "% (" + size + ")";
+}
+
+std::string StepTextureReplacement(Settings& s, int step) {
+    if (step) s.custom_textures = !s.custom_textures;
+    return OnOff(s.custom_textures);
+}
+
+std::string StepTextureDumping(Settings& s, int step) {
+    if (step) s.dump_textures = !s.dump_textures;
+    return OnOff(s.dump_textures);
+}
+
+std::string StepDumpFormat(Settings& s, int step) {
+    return kDumpFormatNames[StepTable(kDumpFormats, s.texture_dump_format, step)];
 }
 
 std::string StepVsync(Settings& s, int step) {
@@ -656,6 +673,9 @@ enum RowId {
     kGyroCalibrateRow,
     kDeadZoneRow,
     kVibrationRow,
+    kTextureReplacementRow,
+    kTextureDumpingRow,
+    kDumpFormatRow,
 };
 
 // in RowId order
@@ -712,6 +732,9 @@ constexpr StepFn kSteps[] = {
     StepGyroCalibrate,
     StepDeadZone,
     StepVibration,
+    StepTextureReplacement,
+    StepTextureDumping,
+    StepDumpFormat,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -757,6 +780,10 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kPlayer2Row, "PLAYER 2"},
     {Kind::Value, kPlayer3Row, "PLAYER 3"},
     {Kind::Value, kPlayer4Row, "PLAYER 4"},
+    {Kind::Heading, -1, "TEXTURES"},
+    {Kind::Value, kTextureReplacementRow, "TEXTURE REPLACEMENT"},
+    {Kind::Value, kTextureDumpingRow, "TEXTURE DUMPING"},
+    {Kind::Value, kDumpFormatRow, "DUMP FORMAT"},
 };
 
 // the mouse rows, then a bind row for each input action
@@ -854,6 +881,7 @@ void RestoreSettingsDefaults() {
     std::string join_ip = s.join_ip;
     s = Settings{};
     s.fps_cap = kFpsCapRefresh;
+    s.custom_textures = false;
     s.join_ip = join_ip;
     g_display_held = false;
     ApplyDisplay();
@@ -1404,6 +1432,12 @@ bool Capturing() { return g_capture.action >= 0; }
 void RefreshCursor() {
     void* hwnd = Window();
     if (hwnd) PostMessageW(HWND(hwnd), WM_SETCURSOR, WPARAM(hwnd), MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+}
+
+void ToggleTextureReplacement() {
+    std::lock_guard lock(UiLock());
+    Get().custom_textures = !Get().custom_textures;
+    Save();
 }
 
 void ToggleMenu() {

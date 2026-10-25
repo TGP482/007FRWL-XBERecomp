@@ -103,6 +103,7 @@ constexpr Entry kEntries[] = {
     {{"objectives", "OBJECTIVES", "Tab"}, Kind::Button, kBack},
     {{"pause", "PAUSE MENU", "Escape"}, Kind::Button, kStart},
     {{"hide_hud", "TOGGLE HUD", ""}, Kind::Host, 0},
+    {{"toggle_textures", "TOGGLE TEXTURE REPLACEMENT", ""}, Kind::Host, 0},
     {{"settings_panel", "SETTINGS PANEL", "F10"}, Kind::Host, 0},
     {{"look_up", "LOOK UP", "Up"}, Kind::Look, kLookUp},
     {{"look_down", "LOOK DOWN", "Down"}, Kind::Look, kLookDown},
@@ -141,6 +142,7 @@ constexpr size_t ActionIndex(std::string_view id) {
     return i;
 }
 constexpr size_t kHudAction = ActionIndex("hide_hud");
+constexpr size_t kTexturesAction = ActionIndex("toggle_textures");
 constexpr size_t kPanelAction = ActionIndex("settings_panel");
 
 constexpr size_t PauseActionIndex() {
@@ -919,5 +921,7 @@ bool HostKeyBound(size_t action, int vk) {
 bool PanelKey(int vk) { return HostKeyBound(kPanelAction, vk); }
 
 bool HudKey(int vk) { return HostKeyBound(kHudAction, vk); }
+
+bool TexturesKey(int vk) { return HostKeyBound(kTexturesAction, vk); }
 
 }  // namespace input

@@ -35,6 +35,11 @@ The latest version of [007FRWL-XBERecomp](https://github.com/TGP482/007FRWL-XBER
 - **Draw Distance** - Increases the level of detail and draw distances past the game's values: 2x, 4x or 8x.
 - **Ambient Occlusion** - Adds screen space ambient occlusion, creating soft contact shadows where surfaces meet. Choose between SSAO and GTAO.
 
+### Textures
+- **Texture Replacement** - Replaces the game's textures with the `.dds` or `.png` images in the `textures\replacement` folder beside the exe.
+- **Texture Dumping** - Saves every texture the game uses into the `textures\dumps` folder beside the exe.
+- **Dump Format** - Choose between PNG or DDS, which keeps the original compression and mipmaps.
+
 ### Input
 - **Mouse and Keyboard** - Full keyboard and mouse support with raw input, adjustable sensitivity, inverted look and rebindable controls.
 - **Controller** - Controller with SDL3 support, buttons can be rebound from the Controller page. Defaults match the Xbox layout.

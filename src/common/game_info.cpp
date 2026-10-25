@@ -29,6 +29,7 @@ void TakeCutsceneSkip(int port, input::Pad& pad);  // cutscenes.cpp
 namespace game {
 
 bool g_fps_cap_saved = false;  // Load only runs when the settings file exists
+bool g_custom_textures_saved = false;
 
 namespace {
 
@@ -42,7 +43,8 @@ bool Take(intptr_t* result) {
     return true;
 }
 
-// the panel's key opens and closes it, Escape closes it unless a key is being bound; the HUD key toggles the HUD
+// the panel's key opens and closes it, Escape closes it unless a key is being bound; the HUD and texture keys
+// toggle theirs
 bool PanelKeyDown(uint32_t msg, uintptr_t key, intptr_t lp, intptr_t* result) {
     bool first_press = !(lp & kKeyWasDown);
     if (first_press && input::PanelKey(int(key))) {
@@ -51,6 +53,10 @@ bool PanelKeyDown(uint32_t msg, uintptr_t key, intptr_t lp, intptr_t* result) {
     }
     if (first_press && !app::MenuOpen() && input::HudKey(int(key))) {
         g_hide_hud = !g_hide_hud;
+        return Take(result);
+    }
+    if (first_press && !app::MenuOpen() && input::TexturesKey(int(key))) {
+        app::ToggleTextureReplacement();
         return Take(result);
     }
     bool binding = app::Capturing() || input::CaptureRecent();
@@ -269,6 +275,7 @@ void Load(const void* table) {
     if (std::isfinite(gyro)) options.gyro.sensitivity = gyro;
     options.monitor = settings["monitor"].value_or(options.monitor);
     g_fps_cap_saved = settings.contains("fps_cap");
+    g_custom_textures_saved = settings.contains("custom_textures");
     LoadNames(settings, "keys", options.keys);
     LoadNames(settings, "pad_buttons", options.pad_buttons);
     LoadPlayers(settings, options.players);
@@ -287,6 +294,8 @@ void Save(void* table) {
 
 void Init() {
     if (!g_fps_cap_saved) app::Get().fps_cap = app::kFpsCapRefresh;
+    // texture replacement starts off
+    if (!g_custom_textures_saved) app::Get().custom_textures = false;
     input::LoadBindings();
     input::LoadPadBindings();
     audio::SetOutputMode(Opt().audio_output);

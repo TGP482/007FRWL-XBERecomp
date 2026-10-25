@@ -11,6 +11,7 @@ namespace app {
 bool MenuOpen();
 bool Capturing();  // a key binding waits for a key
 void ToggleMenu();
+void ToggleTextureReplacement();  // the bind's: flips and saves the setting
 void DrawUi(double fps);  // fps is unused until the counter exists
 void PaceFrame();  // app::Pace, with kFpsCapRefresh; game thread, after the present
 // the game menus' cursor (HCURSOR): cursor.png beside the exe sized to the frame, else the system arrow

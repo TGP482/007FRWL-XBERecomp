@@ -44,6 +44,7 @@ void LoadBindings();    // after the settings load
 int PollCapturedKey();  // a bindable key or mouse button held now, 0 for none; marks a capture as polling
 bool PanelKey(int vk);  // the settings panel is bound to this key and no key capture wants it
 bool HudKey(int vk);    // the toggle HUD action is bound to this key and no key capture wants it
+bool TexturesKey(int vk);  // the same for the toggle texture replacement action
 bool CaptureRecent();   // a key capture polled a moment ago
 
 // the actions with a key down now, a bit per Actions() index; none while the game does not have the keys
