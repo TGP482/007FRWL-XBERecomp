@@ -23,6 +23,7 @@ constexpr Entry kEntries[] = {
     {"MOUSE AND KEYBOARD", {u"Souris et clavier", u"Maus und Tastatur", u"Mouse e tastiera", u"Ratón y teclado"}},
     {"CONTROLLER", {u"Manette", u"Controller", u"Controller", u"Mando"}},
     {"GENERAL", {u"Général", u"Allgemein", u"Generale", u"General"}},
+    {"BUTTONS", {u"Boutons", u"Tasten", u"Pulsanti", u"Botones"}},
     {"DISPLAY", {u"Affichage", u"Anzeige", u"Video", u"Pantalla"}},
     {"GRAPHICS", {u"Graphismes", u"Grafik", u"Grafica", u"Gráficos"}},
     {"RESTORE DEFAULTS", {u"Rétablir les valeurs par défaut", u"Standard wiederherstellen", u"Ripristina predefiniti", u"Restaurar predeterminados"}},
@@ -94,8 +95,12 @@ constexpr Entry kEntries[] = {
     {"Skip", {u"Passer", u"Überspringen", u"Salta", u"Saltar"}},
 
     // MOUSE AND KEYBOARD rows
-    {"MOUSE SENSITIVITY", {u"Sensibilité de la souris", u"Mausempfindlichkeit", u"Sensibilità del mouse", u"Sensibilidad del ratón"}},
-    {"INVERT LOOK", {u"Inverser la visée", u"Blick umkehren", u"Inverti visuale", u"Invertir vista"}},
+    {"MOUSE HORIZONTAL SENSITIVITY", {u"Sensibilité horizontale de la souris", u"Horizontale Mausempfindlichkeit", u"Sensibilità orizzontale del mouse", u"Sensibilidad horizontal del ratón"}},
+    {"MOUSE VERTICAL SENSITIVITY", {u"Sensibilité verticale de la souris", u"Vertikale Mausempfindlichkeit", u"Sensibilità verticale del mouse", u"Sensibilidad vertical del ratón"}},
+    {"AIM HORIZONTAL SENSITIVITY", {u"Sensibilité horizontale de visée", u"Horizontale Zielempfindlichkeit", u"Sensibilità orizzontale di mira", u"Sensibilidad horizontal al apuntar"}},
+    {"AIM VERTICAL SENSITIVITY", {u"Sensibilité verticale de visée", u"Vertikale Zielempfindlichkeit", u"Sensibilità verticale di mira", u"Sensibilidad vertical al apuntar"}},
+    {"INVERT X AXIS", {u"Inverser l'axe X", u"X-Achse umkehren", u"Inverti asse X", u"Invertir eje X"}},
+    {"INVERT Y AXIS", {u"Inverser l'axe Y", u"Y-Achse umkehren", u"Inverti asse Y", u"Invertir eje Y"}},
     {"CAMERA CENTRING", {u"Recentrage de la caméra", u"Kamerazentrierung", u"Centratura visuale", u"Centrado de cámara"}},
     {"FREE AIM", {u"Visée libre", u"Freies Zielen", u"Mira libera", u"Apuntado libre"}},
     {"MOVE FORWARD", {u"Avancer", u"Vorwärts bewegen", u"Avanti", u"Avanzar"}},

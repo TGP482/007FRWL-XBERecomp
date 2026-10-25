@@ -61,9 +61,16 @@ bool OnKeyboardPort(uint32_t player) {
     return player != 0 && int(R32(player + kPlayerPort)) == input::KeyboardPort();
 }
 
+bool Aims(View view) { return view == View::Scope || view == View::LockOn || view == View::Throw; }
+
 input::MouseMove TakeForPlayer(View view, uint32_t player) {
     input::MouseMove move = Take(view);
-    return OnKeyboardPort(player) ? move : input::MouseMove{};
+    if (!OnKeyboardPort(player)) return {};
+    if (Aims(view)) {
+        move.dx *= game::Opt().aim_horizontal_sensitivity;
+        move.dy *= game::Opt().aim_vertical_sensitivity;
+    }
+    return move;
 }
 
 bool Moved(input::MouseMove move) { return move.dx != 0.0f || move.dy != 0.0f; }

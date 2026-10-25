@@ -24,7 +24,8 @@ struct Options {
     bool fps_counter = false;
     bool hdr_output = true;  // HDR10 on a display with Windows HDR on
     uint32_t colour_blind = 0;  // 0 off, 1 protanopia, 2 deuteranopia, 3 tritanopia
-    bool invert_mouse = false;
+    bool invert_mouse = false;  // the Y axis
+    bool invert_mouse_x = false;
     bool camera_centring = false;  // the chase camera swings back behind Bond on keyboard and mouse
     bool free_aim = false;  // holding aim with any gun gives the rocket launcher's over the shoulder aim
     bool pad_camera_centring = true;  // the two above for a controller; the console centres
@@ -36,7 +37,11 @@ struct Options {
     uint32_t audio_output = 0;  // audio::kOutputAuto, kOutputStereo, kOutputSurround or kOutputMono
     uint32_t master_volume = 100;  // percent of the console's level, every sound
     uint32_t music_volume = 100;   // percent, the music alone
-    float mouse_sensitivity = 1.0f;
+    float mouse_sensitivity = 1.0f;  // horizontal
+    float mouse_vertical_sensitivity = 1.0f;
+    // in the sniper scope, lock on fine aim and over the shoulder aim, times the sensitivity above
+    float aim_horizontal_sensitivity = 1.0f;
+    float aim_vertical_sensitivity = 1.0f;
     uint32_t msaa = 0;  // samples a pixel of the scene, 0 off
     bool smaa = false;  // over the finished frame, HUD included; combines with msaa
     uint32_t draw_distance = 1;  // LOD and object distance multiplier, 1 the game's

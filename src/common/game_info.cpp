@@ -213,12 +213,28 @@ void SaveNames(toml::table& settings, const char* name, const std::map<std::stri
     settings.insert(name, table);
 }
 
+struct FloatOption {
+    const char* key;
+    float Options::*value;
+};
+constexpr FloatOption kFloats[] = {
+    {"mouse_sensitivity", &Options::mouse_sensitivity},
+    {"mouse_vertical_sensitivity", &Options::mouse_vertical_sensitivity},
+    {"aim_horizontal_sensitivity", &Options::aim_horizontal_sensitivity},
+    {"aim_vertical_sensitivity", &Options::aim_vertical_sensitivity},
+};
+
 // what the options list cannot hold
 void Load(const void* table) {
     const toml::table& settings = *static_cast<const toml::table*>(table);
     Options& options = Opt();
-    float sensitivity = float(settings["mouse_sensitivity"].value_or(double(options.mouse_sensitivity)));
-    if (std::isfinite(sensitivity)) options.mouse_sensitivity = sensitivity;
+    for (const FloatOption& f : kFloats) {
+        float value = float(settings[f.key].value_or(double(options.*f.value)));
+        if (std::isfinite(value)) options.*f.value = value;
+    }
+    // files from before the split have the one sensitivity
+    bool split = settings.contains("mouse_vertical_sensitivity");
+    if (!split) options.mouse_vertical_sensitivity = options.mouse_sensitivity;
     options.monitor = settings["monitor"].value_or(options.monitor);
     g_fps_cap_saved = settings.contains("fps_cap");
     LoadNames(settings, "keys", options.keys);
@@ -230,7 +246,7 @@ void Save(void* table) {
     toml::table& settings = *static_cast<toml::table*>(table);
     settings.insert("monitor", Opt().monitor);
     // thousandths, so the file reads 0.3 and not 0.30000001192092896
-    settings.insert("mouse_sensitivity", std::round(double(Opt().mouse_sensitivity) * 1000.0) / 1000.0);
+    for (const FloatOption& f : kFloats) settings.insert(f.key, std::round(double(Opt().*f.value) * 1000.0) / 1000.0);
     SaveNames(settings, "keys", Opt().keys);
     SaveNames(settings, "pad_buttons", Opt().pad_buttons);
     for (int i = 0; i < kPlayers; i++) settings.insert(PlayerKey(i), PortName(Opt().players[size_t(i)]));
@@ -268,6 +284,7 @@ const app::GameInfo app::kGame = {
     .images = {{"default.xbe", "007FRWL"}}, // each recompiled xbe and its exe, for title launches
     .options = {                            // game settings kept in the settings file
         {"invert_mouse", &game::Opt().invert_mouse, nullptr},
+        {"invert_mouse_x", &game::Opt().invert_mouse_x, nullptr},
         {"camera_centring", &game::Opt().camera_centring, nullptr},
         {"free_aim", &game::Opt().free_aim, nullptr},
         {"pad_camera_centring", &game::Opt().pad_camera_centring, nullptr},

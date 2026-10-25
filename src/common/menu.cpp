@@ -427,8 +427,9 @@ std::string SensitivityText(int tenths) {
     return text;
 }
 
+template <float game::Options::*Value>
 std::string StepSensitivity(Settings&, int step) {
-    float& sensitivity = game::Opt().mouse_sensitivity;
+    float& sensitivity = game::Opt().*Value;
     int tenths = int(std::lround(sensitivity * kTenthsPerUnit));
     if (step) {
         int slot = std::clamp(tenths, 1, kSensitivitySlots) - 1;
@@ -438,8 +439,9 @@ std::string StepSensitivity(Settings&, int step) {
     return SensitivityText(tenths);
 }
 
-std::string StepInvertLook(Settings&, int step) {
-    bool& on = game::Opt().invert_mouse;
+template <bool game::Options::*Value>
+std::string StepInvert(Settings&, int step) {
+    bool& on = game::Opt().*Value;
     if (step) on = !on;
     return OnOff(on);
 }
@@ -550,8 +552,8 @@ enum RowId {
     kFpsCounterRow,
     kAnisoRow,
     kSkipIntrosRow,
-    kSensitivityRow,
-    kInvertLookRow,
+    kMouseHorizontalRow,
+    kInvertYRow,
     kCameraCentringRow,
     kAmbientOcclusionRow,
     kAudioOutputRow,
@@ -578,6 +580,10 @@ enum RowId {
     kMasterVolumeRow,
     kMusicVolumeRow,
     kColourBlindRow,
+    kMouseVerticalRow,
+    kAimHorizontalRow,
+    kAimVerticalRow,
+    kInvertXRow,
 };
 
 // in RowId order
@@ -590,8 +596,8 @@ constexpr StepFn kSteps[] = {
     StepFpsCounter,
     StepAniso,
     StepSkipIntros,
-    StepSensitivity,
-    StepInvertLook,
+    StepSensitivity<&game::Options::mouse_sensitivity>,
+    StepInvert<&game::Options::invert_mouse>,
     StepCameraCentring,
     StepAmbientOcclusion,
     StepAudioOutput,
@@ -618,6 +624,10 @@ constexpr StepFn kSteps[] = {
     StepMasterVolume,
     StepMusicVolume,
     StepColourBlind,
+    StepSensitivity<&game::Options::mouse_vertical_sensitivity>,
+    StepSensitivity<&game::Options::aim_horizontal_sensitivity>,
+    StepSensitivity<&game::Options::aim_vertical_sensitivity>,
+    StepInvert<&game::Options::invert_mouse_x>,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -670,8 +680,12 @@ const std::vector<Row>& InputRows() {
     static const std::vector<Row> list = [] {
         std::vector<Row> out = {
             {Kind::Heading, -1, "MOUSE"},
-            {Kind::Value, kSensitivityRow, "MOUSE SENSITIVITY"},
-            {Kind::Value, kInvertLookRow, "INVERT LOOK"},
+            {Kind::Value, kMouseHorizontalRow, "MOUSE HORIZONTAL SENSITIVITY"},
+            {Kind::Value, kMouseVerticalRow, "MOUSE VERTICAL SENSITIVITY"},
+            {Kind::Value, kAimHorizontalRow, "AIM HORIZONTAL SENSITIVITY"},
+            {Kind::Value, kAimVerticalRow, "AIM VERTICAL SENSITIVITY"},
+            {Kind::Value, kInvertXRow, "INVERT X AXIS"},
+            {Kind::Value, kInvertYRow, "INVERT Y AXIS"},
             {Kind::Value, kCameraCentringRow, "CAMERA CENTRING"},
             {Kind::Value, kFreeAimRow, "FREE AIM"},
             {Kind::Heading, -1, "KEYBOARD"},
@@ -695,9 +709,10 @@ const std::vector<Row>& InputRows() {
 const std::vector<Row>& ControllerRows() {
     static const std::vector<Row> list = [] {
         std::vector<Row> out = {
-            {Kind::Heading, -1, "CONTROLLER"},
+            {Kind::Heading, -1, "GENERAL"},
             {Kind::Value, kPadCameraCentringRow, "CAMERA CENTRING"},
             {Kind::Value, kPadFreeAimRow, "FREE AIM"},
+            {Kind::Heading, -1, "BUTTONS"},
         };
         std::span<const input::Action> actions = input::PadActions();
         for (size_t i = 0; i < actions.size(); i++) out.push_back({Kind::PadBind, int(i), actions[i].label});
@@ -1071,7 +1086,11 @@ void RestoreDefaults(int page) {
         const game::Options defaults;
         game::Options& options = game::Opt();
         options.mouse_sensitivity = defaults.mouse_sensitivity;
+        options.mouse_vertical_sensitivity = defaults.mouse_vertical_sensitivity;
+        options.aim_horizontal_sensitivity = defaults.aim_horizontal_sensitivity;
+        options.aim_vertical_sensitivity = defaults.aim_vertical_sensitivity;
         options.invert_mouse = defaults.invert_mouse;
+        options.invert_mouse_x = defaults.invert_mouse_x;
         options.camera_centring = defaults.camera_centring;
         options.free_aim = defaults.free_aim;
         input::ResetBindings();
