@@ -3,6 +3,7 @@
 #include <cmath>
 #include <optional>
 
+#include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
 #include "xdk/hle.h"
@@ -18,6 +19,7 @@ constexpr uint32_t kGameMode = 0x826E20;
 constexpr uint32_t kModeRunning = 2;
 constexpr uint32_t kFrameCount = 0x824368;
 constexpr uint32_t kPlayerPort = 0xB24;  // in the player, the controller that drives it
+constexpr uint32_t kGyroPort = 0;  // the gyro turns player 1 alone
 
 constexpr float kDegreesPerCount = 0.04f;  // at sensitivity 1
 constexpr float kRadiansPerDegree = 0.017453292f;
@@ -32,21 +34,27 @@ struct Share {
     input::MouseMove taken{};  // this frame's, for another camera of the view updated in the same frame
     uint32_t frame = 0;
 };
-std::array<Share, size_t(View::Count)> g_shares;
+using Shares = std::array<Share, size_t(View::Count)>;
+Shares g_shares;
+Shares g_gyro_shares;  // the gyro's turn as mouse counts
 
-void AddToShares(input::MouseMove move) {
-    for (Share& share : g_shares) {
+void AddToShares(Shares& shares, input::MouseMove move) {
+    for (Share& share : shares) {
         share.move.dx += move.dx;
         share.move.dy += move.dy;
     }
 }
 
+// the gyro's degrees as the counts that turn the view as far; its yaw is left positive and its pitch down positive
+void GatherGyro() {
+    gyro::Turn turn = gyro::Take(game::Opt().gyro);
+    if (app::MenuOpen()) return;
+    AddToShares(g_gyro_shares, {-turn.yaw / kDegreesPerCount, turn.pitch / kDegreesPerCount});
+}
+
 // the motion since the view last turned; a view that missed a frame starts again from none. Leaving a door the
 // game updates two chase cameras a frame while it blends them, each turns by the same motion.
-input::MouseMove Take(View view) {
-    if (R32(kGameMode) != kModeRunning) return {};
-    if (std::optional<input::MouseMove> move = input::TakeMouse()) AddToShares(*move);
-    Share& share = g_shares[size_t(view)];
+input::MouseMove TakeShare(Share& share) {
     uint32_t frame = R32(kFrameCount);
     if (frame == share.frame) return share.taken;
     bool missed = frame - share.frame > 1;
@@ -56,6 +64,18 @@ input::MouseMove Take(View view) {
     return share.taken;
 }
 
+struct Motion {
+    input::MouseMove mouse;
+    input::MouseMove gyro;
+};
+
+Motion Take(View view) {
+    if (R32(kGameMode) != kModeRunning) return {};
+    if (std::optional<input::MouseMove> move = input::TakeMouse()) AddToShares(g_shares, *move);
+    GatherGyro();
+    return {TakeShare(g_shares[size_t(view)]), TakeShare(g_gyro_shares[size_t(view)])};
+}
+
 // the player driven from the keyboard's port, the other players keep their controllers
 bool OnKeyboardPort(uint32_t player) {
     return player != 0 && int(R32(player + kPlayerPort)) == input::KeyboardPort();
@@ -63,12 +83,20 @@ bool OnKeyboardPort(uint32_t player) {
 
 bool Aims(View view) { return view == View::Scope || view == View::LockOn || view == View::Throw; }
 
+bool OnGyroPort(uint32_t player) { return player != 0 && R32(player + kPlayerPort) == kGyroPort; }
+
+// the mouse for the keyboard's player, its aim views scaled; the gyro's turn added for player 1
 input::MouseMove TakeForPlayer(View view, uint32_t player) {
-    input::MouseMove move = Take(view);
-    if (!OnKeyboardPort(player)) return {};
+    Motion motion = Take(view);
+    input::MouseMove move{};
+    if (OnKeyboardPort(player)) move = motion.mouse;
     if (Aims(view)) {
         move.dx *= game::Opt().aim_horizontal_sensitivity;
         move.dy *= game::Opt().aim_vertical_sensitivity;
+    }
+    if (OnGyroPort(player)) {
+        move.dx += motion.gyro.dx;
+        move.dy += motion.gyro.dy;
     }
     return move;
 }

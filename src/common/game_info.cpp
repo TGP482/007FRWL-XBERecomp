@@ -239,6 +239,8 @@ void Load(const void* table) {
     // files from before the split have the one sensitivity
     bool split = settings.contains("mouse_vertical_sensitivity");
     if (!split) options.mouse_vertical_sensitivity = options.mouse_sensitivity;
+    float gyro = float(settings["gyro_sensitivity"].value_or(double(options.gyro.sensitivity)));
+    if (std::isfinite(gyro)) options.gyro.sensitivity = gyro;
     options.monitor = settings["monitor"].value_or(options.monitor);
     g_fps_cap_saved = settings.contains("fps_cap");
     LoadNames(settings, "keys", options.keys);
@@ -251,6 +253,7 @@ void Save(void* table) {
     settings.insert("monitor", Opt().monitor);
     // thousandths, so the file reads 0.3 and not 0.30000001192092896
     for (const FloatOption& f : kFloats) settings.insert(f.key, std::round(double(Opt().*f.value) * 1000.0) / 1000.0);
+    settings.insert("gyro_sensitivity", std::round(double(Opt().gyro.sensitivity) * 1000.0) / 1000.0);
     SaveNames(settings, "keys", Opt().keys);
     SaveNames(settings, "pad_buttons", Opt().pad_buttons);
     for (int i = 0; i < kPlayers; i++) settings.insert(PlayerKey(i), PortName(Opt().players[size_t(i)]));
@@ -289,6 +292,10 @@ const app::GameInfo app::kGame = {
     .options = {                            // game settings kept in the settings file
         {"invert_mouse", &game::Opt().invert_mouse, nullptr},
         {"invert_mouse_x", &game::Opt().invert_mouse_x, nullptr},
+        {"gyro_aiming", &game::Opt().gyro.enabled, nullptr},
+        {"gyro_axis", nullptr, &game::Opt().gyro.axis},
+        {"gyro_button", nullptr, &game::Opt().gyro.button},
+        {"gyro_button_mode", nullptr, &game::Opt().gyro.button_mode},
         {"camera_centring", &game::Opt().camera_centring, nullptr},
         {"free_aim", &game::Opt().free_aim, nullptr},
         {"pad_camera_centring", &game::Opt().pad_camera_centring, nullptr},

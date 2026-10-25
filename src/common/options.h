@@ -4,6 +4,8 @@
 #include <map>
 #include <string>
 
+#include "common/gyro.h"
+
 // the game's own settings, in the settings file through app::kGame.options
 namespace game {
 
@@ -47,6 +49,7 @@ struct Options {
     float pad_vertical_sensitivity = 1.0f;
     float pad_aim_horizontal_sensitivity = 1.0f;
     float pad_aim_vertical_sensitivity = 1.0f;
+    gyro::Settings gyro;  // the controller's gyro turns player 1's view, beside the right stick
     uint32_t msaa = 0;  // samples a pixel of the scene, 0 off
     bool smaa = false;  // over the finished frame, HUD included; combines with msaa
     uint32_t draw_distance = 1;  // LOD and object distance multiplier, 1 the game's
