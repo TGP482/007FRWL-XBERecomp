@@ -280,6 +280,7 @@ const app::GameInfo app::kGame = {
         {"inventory_pause", &game::Opt().inventory_pause, nullptr},
         {"fps_counter", &game::Opt().fps_counter, nullptr},
         {"hdr_output", &game::Opt().hdr_output, nullptr},
+        {"colour_blind", nullptr, &game::Opt().colour_blind},
         {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},
         {"audio_output", nullptr, &game::Opt().audio_output},
         {"master_volume", nullptr, &game::Opt().master_volume},

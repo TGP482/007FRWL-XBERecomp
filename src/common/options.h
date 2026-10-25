@@ -23,6 +23,7 @@ struct Options {
     uint32_t skip_popups = 0;  // bits: 1 the boxes that pause the game, 2 the objective messages
     bool fps_counter = false;
     bool hdr_output = true;  // HDR10 on a display with Windows HDR on
+    uint32_t colour_blind = 0;  // 0 off, 1 protanopia, 2 deuteranopia, 3 tritanopia
     bool invert_mouse = false;
     bool camera_centring = false;  // the chase camera swings back behind Bond on keyboard and mouse
     bool free_aim = false;  // holding aim with any gun gives the rocket launcher's over the shoulder aim

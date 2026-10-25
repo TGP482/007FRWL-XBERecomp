@@ -108,6 +108,9 @@ constexpr uint32_t kSkipPopups[] = {0, 2, 1, 3};
 const char* const kSkipPopupNames[] = {"OFF", "OBJECTIVES", "TIPS", "ALL"};
 constexpr uint32_t kFmvScales[] = {0, 1};
 const char* const kFmvScaleNames[] = {"FILL", "4:3"};
+
+constexpr uint32_t kColourBlindModes[] = {0, 1, 2, 3};
+const char* const kColourBlindNames[] = {"OFF", "PROTANOPIA", "DEUTERANOPIA", "TRITANOPIA"};
 constexpr uint32_t kAudioOutputs[] = {audio::kOutputAuto, audio::kOutputMono, audio::kOutputStereo,
                                       audio::kOutputSurround};
 const char* const kAudioOutputNames[] = {"AUTOMATIC", "MONO", "2.0 STEREO", "5.1 SURROUND"};
@@ -330,6 +333,10 @@ std::string StepFpsCounter(Settings&, int step) {
 
 std::string StepFmvScale(Settings&, int step) {
     return kFmvScaleNames[StepTable(kFmvScales, game::Opt().fmv_scale, step)];
+}
+
+std::string StepColourBlind(Settings&, int step) {
+    return kColourBlindNames[StepTable(kColourBlindModes, game::Opt().colour_blind, step)];
 }
 
 std::string StepAniso(Settings& s, int step) { return kAnisoNames[StepTable(kAnisoValues, s.aniso, step)]; }
@@ -570,6 +577,7 @@ enum RowId {
     kPadFreeAimRow,
     kMasterVolumeRow,
     kMusicVolumeRow,
+    kColourBlindRow,
 };
 
 // in RowId order
@@ -609,6 +617,7 @@ constexpr StepFn kSteps[] = {
     StepPadFreeAim,
     StepMasterVolume,
     StepMusicVolume,
+    StepColourBlind,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -631,6 +640,7 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kMaxFpsRow, "MAX FRAME RATE"},
     {Kind::Value, kFpsCounterRow, "FPS COUNTER"},
     {Kind::Value, kFmvScaleRow, "FMV SCALE"},
+    {Kind::Value, kColourBlindRow, "COLOUR BLIND MODE"},
     {Kind::Heading, -1, "GRAPHICS"},
     {Kind::Value, kMsaaRow, "MSAA"},
     {Kind::Value, kSmaaRow, "SMAA"},
@@ -1037,6 +1047,7 @@ void RestoreDefaults(int page) {
         game::Opt().fps_counter = defaults.fps_counter;
         game::Opt().hdr_output = defaults.hdr_output;
         game::Opt().fmv_scale = defaults.fmv_scale;
+        game::Opt().colour_blind = defaults.colour_blind;
         game::Opt().ambient_occlusion = defaults.ambient_occlusion;
         game::Opt().audio_output = defaults.audio_output;
         game::Opt().master_volume = defaults.master_volume;
