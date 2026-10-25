@@ -73,6 +73,20 @@ input::MouseMove TakeForPlayer(View view, uint32_t player) {
     return move;
 }
 
+// the right stick's share of a turn, scaled by the controller sensitivities; aim views take the aim ones too
+struct StickScale {
+    float x;
+    float y;
+};
+
+StickScale PadScale(View view) {
+    const game::Options& o = game::Opt();
+    bool aim = Aims(view);
+    float x = o.pad_horizontal_sensitivity * (aim ? o.pad_aim_horizontal_sensitivity : 1.0f);
+    float y = o.pad_vertical_sensitivity * (aim ? o.pad_aim_vertical_sensitivity : 1.0f);
+    return {x, y};
+}
+
 bool Moved(input::MouseMove move) { return move.dx != 0.0f || move.dy != 0.0f; }
 
 // the stick deflection that turns a view by the angle this frame, at the rate a full stick turns it
@@ -120,11 +134,11 @@ struct TurretStick {
 };
 TurretStick g_turret_stick;  // the smoothed stick alone, put back once the turret turned
 
-// past a full input the game raises the speed by the input too, so a turn of stick times that plus the mouse
-// goes back in as its root
-float TurretInput(float stick, float turn, float speed, float seconds) {
+// past a full input the game raises the speed by the input too, so a turn of stick times that, scaled, plus the
+// mouse goes back in as its root
+float TurretInput(float stick, float scale, float turn, float speed, float seconds) {
     if (speed <= 0.0f) return stick;
-    float stick_turn = stick * std::max(1.0f, std::fabs(stick));
+    float stick_turn = stick * std::max(1.0f, std::fabs(stick)) * scale;
     float target = stick_turn + turn / (speed * std::max(kMinSeconds, seconds));
     if (std::fabs(target) <= 1.0f) return target;
     return std::copysign(std::sqrt(std::fabs(target)), target);
@@ -175,6 +189,7 @@ constexpr float kLockOnUnitsPerCount = 10.0f * kRadiansPerCount;  // the mouse's
 
 constexpr int kThrowYawReg = 1;
 constexpr int kThrowPitchReg = 0;
+constexpr uint32_t kThrowStatePitch = 0x68;  // edi, the pitch before this update
 
 input::MouseMove g_throw{};  // this update's motion
 
@@ -221,10 +236,12 @@ void ChaseFollow(X86Context& ctx, uint8_t*) {
 }
 
 void ChasePitch(X86Context& ctx, uint8_t*) {
+    G<float>(ctx.esp + kChasePitchStep) *= PadScale(View::Chase).y;
     G<float>(ctx.esp + kChasePitchStep) += g_chase.dy * kRadiansPerCount;
 }
 
 void ChaseYaw(X86Context& ctx, uint8_t*) {
+    G<float>(ctx.esp + kChaseYawStep) *= PadScale(View::Chase).x;
     G<float>(ctx.esp + kChaseYawStep) -= g_chase.dx * kRadiansPerCount;
 }
 
@@ -236,6 +253,7 @@ void JetpackTurnStick(X86Context& ctx, uint8_t*) {
 
 void JetpackTurn(X86Context& ctx, uint8_t*) {
     input::MouseMove move = TakeForPlayer(View::Jetpack, R32(ctx.ebx + kJetpackPlayer));
+    G<float>(ctx.esp + kJetpackTurnStep) *= PadScale(View::Jetpack).x;
     G<float>(ctx.esp + kJetpackTurnStep) -= move.dx * kRadiansPerCount;
 }
 
@@ -246,9 +264,12 @@ void TurretAim(X86Context& ctx, uint8_t*) {
     g_turret_stick = {yaw, pitch};
     input::MouseMove move = TakeForPlayer(View::Turret, R32(ctx.esi + kTurretPlayer));
     float seconds = G<float>(ctx.esp + kTurretSeconds);
-    yaw = TurretInput(yaw, -move.dx * kRadiansPerCount, G<float>(ctx.esi + kTurretYawSpeed), seconds);
+    StickScale scale = PadScale(View::Turret);
+    float yaw_speed = G<float>(ctx.esi + kTurretYawSpeed);
+    float pitch_speed = G<float>(ctx.esi + kTurretPitchSpeed);
+    yaw = TurretInput(yaw, scale.x, -move.dx * kRadiansPerCount, yaw_speed, seconds);
     // a positive pitch input lowers the turret
-    pitch = TurretInput(pitch, move.dy * kRadiansPerCount, G<float>(ctx.esi + kTurretPitchSpeed), seconds);
+    pitch = TurretInput(pitch, scale.y, move.dy * kRadiansPerCount, pitch_speed, seconds);
 }
 
 // the turret turned, its smoothing goes on from the stick alone
@@ -263,6 +284,9 @@ void ScopeAim(X86Context& ctx, uint8_t*) {
     float yaw_rate = G<float>(ctx.esp + kScopeYawRate);
     float pitch_rate = G<float>(ctx.esp + kScopePitchRate);
     float per_count = kRadiansPerCount * ScopeZoom(ctx.esi);
+    StickScale scale = PadScale(View::Scope);
+    ctx.xmm[kScopeStickXReg].f[0] *= scale.x;
+    G<float>(ctx.esp + kScopeStickY) *= scale.y;
     ctx.xmm[kScopeStickXReg].f[0] += StickForTurn(move.dx * per_count, yaw_rate, seconds);
     // a positive stick y lowers the scope, as it lowers the chase camera
     G<float>(ctx.esp + kScopeStickY) += StickForTurn(move.dy * per_count, pitch_rate, seconds);
@@ -273,6 +297,9 @@ void LockOnAim(X86Context& ctx, uint8_t*) {
     float seconds = G<float>(ctx.esp + kLockOnSeconds);
     float rate_x = ctx.xmm[kLockOnRateXReg].f[0];
     float rate_y = ctx.xmm[kLockOnRateYReg].f[0];
+    StickScale scale = PadScale(View::LockOn);
+    G<float>(ctx.esp + kLockOnStickX) *= scale.x;
+    G<float>(ctx.esp + kLockOnStickY) *= scale.y;
     G<float>(ctx.esp + kLockOnStickX) += StickForTurn(move.dx * kLockOnUnitsPerCount, rate_x, seconds);
     // a positive stick y lowers the aim here
     G<float>(ctx.esp + kLockOnStickY) += StickForTurn(move.dy * kLockOnUnitsPerCount, rate_y, seconds);
@@ -280,12 +307,16 @@ void LockOnAim(X86Context& ctx, uint8_t*) {
 
 void ThrowYaw(X86Context& ctx, uint8_t*) {
     g_throw = TakeForPlayer(View::Throw, ctx.esi);
+    ctx.xmm[kThrowYawReg].f[0] *= PadScale(View::Throw).x;
     ctx.xmm[kThrowYawReg].f[0] -= g_throw.dx * kRadiansPerCount;
 }
 
 // the pitch grows with the stick y, so a positive pitch lowers the throw
 void ThrowPitch(X86Context& ctx, uint8_t*) {
-    ctx.xmm[kThrowPitchReg].f[0] += g_throw.dy * kRadiansPerCount;
+    float before = G<float>(ctx.edi + kThrowStatePitch);
+    float& pitch = ctx.xmm[kThrowPitchReg].f[0];
+    pitch = before + (pitch - before) * PadScale(View::Throw).y;
+    pitch += g_throw.dy * kRadiansPerCount;
 }
 
 // the copter reads its sticks for the player in eax
@@ -294,6 +325,7 @@ void CopterMouseTake(X86Context& ctx, uint8_t*) {
 }
 
 void CopterTurn(X86Context& ctx, uint8_t*) {
+    ctx.xmm[kCopterTurnReg].f[0] *= PadScale(View::Copter).x;
     ctx.xmm[kCopterTurnReg].f[0] -= g_copter.dx * kDegreesPerCount;
     g_copter = {};
 }

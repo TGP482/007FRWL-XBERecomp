@@ -584,6 +584,10 @@ enum RowId {
     kAimHorizontalRow,
     kAimVerticalRow,
     kInvertXRow,
+    kPadHorizontalRow,
+    kPadVerticalRow,
+    kPadAimHorizontalRow,
+    kPadAimVerticalRow,
 };
 
 // in RowId order
@@ -628,6 +632,10 @@ constexpr StepFn kSteps[] = {
     StepSensitivity<&game::Options::aim_horizontal_sensitivity>,
     StepSensitivity<&game::Options::aim_vertical_sensitivity>,
     StepInvert<&game::Options::invert_mouse_x>,
+    StepSensitivity<&game::Options::pad_horizontal_sensitivity>,
+    StepSensitivity<&game::Options::pad_vertical_sensitivity>,
+    StepSensitivity<&game::Options::pad_aim_horizontal_sensitivity>,
+    StepSensitivity<&game::Options::pad_aim_vertical_sensitivity>,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -710,6 +718,10 @@ const std::vector<Row>& ControllerRows() {
     static const std::vector<Row> list = [] {
         std::vector<Row> out = {
             {Kind::Heading, -1, "GENERAL"},
+            {Kind::Value, kPadHorizontalRow, "CONTROLLER HORIZONTAL SENSITIVITY"},
+            {Kind::Value, kPadVerticalRow, "CONTROLLER VERTICAL SENSITIVITY"},
+            {Kind::Value, kPadAimHorizontalRow, "AIM HORIZONTAL SENSITIVITY"},
+            {Kind::Value, kPadAimVerticalRow, "AIM VERTICAL SENSITIVITY"},
             {Kind::Value, kPadCameraCentringRow, "CAMERA CENTRING"},
             {Kind::Value, kPadFreeAimRow, "FREE AIM"},
             {Kind::Heading, -1, "BUTTONS"},
@@ -1079,6 +1091,10 @@ void RestoreDefaults(int page) {
         RestoreSettingsDefaults();
     } else if (page == kControllerPage) {
         const game::Options defaults;
+        game::Opt().pad_horizontal_sensitivity = defaults.pad_horizontal_sensitivity;
+        game::Opt().pad_vertical_sensitivity = defaults.pad_vertical_sensitivity;
+        game::Opt().pad_aim_horizontal_sensitivity = defaults.pad_aim_horizontal_sensitivity;
+        game::Opt().pad_aim_vertical_sensitivity = defaults.pad_aim_vertical_sensitivity;
         game::Opt().pad_camera_centring = defaults.pad_camera_centring;
         game::Opt().pad_free_aim = defaults.pad_free_aim;
         input::ResetPadBindings();

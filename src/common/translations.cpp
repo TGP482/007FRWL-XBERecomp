@@ -99,6 +99,8 @@ constexpr Entry kEntries[] = {
     {"MOUSE VERTICAL SENSITIVITY", {u"Sensibilité verticale de la souris", u"Vertikale Mausempfindlichkeit", u"Sensibilità verticale del mouse", u"Sensibilidad vertical del ratón"}},
     {"AIM HORIZONTAL SENSITIVITY", {u"Sensibilité horizontale de visée", u"Horizontale Zielempfindlichkeit", u"Sensibilità orizzontale di mira", u"Sensibilidad horizontal al apuntar"}},
     {"AIM VERTICAL SENSITIVITY", {u"Sensibilité verticale de visée", u"Vertikale Zielempfindlichkeit", u"Sensibilità verticale di mira", u"Sensibilidad vertical al apuntar"}},
+    {"CONTROLLER HORIZONTAL SENSITIVITY", {u"Sensibilité horizontale de la manette", u"Horizontale Controller-Empfindlichkeit", u"Sensibilità orizzontale del controller", u"Sensibilidad horizontal del mando"}},
+    {"CONTROLLER VERTICAL SENSITIVITY", {u"Sensibilité verticale de la manette", u"Vertikale Controller-Empfindlichkeit", u"Sensibilità verticale del controller", u"Sensibilidad vertical del mando"}},
     {"INVERT X AXIS", {u"Inverser l'axe X", u"X-Achse umkehren", u"Inverti asse X", u"Invertir eje X"}},
     {"INVERT Y AXIS", {u"Inverser l'axe Y", u"Y-Achse umkehren", u"Inverti asse Y", u"Invertir eje Y"}},
     {"CAMERA CENTRING", {u"Recentrage de la caméra", u"Kamerazentrierung", u"Centratura visuale", u"Centrado de cámara"}},

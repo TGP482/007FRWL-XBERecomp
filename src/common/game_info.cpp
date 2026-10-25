@@ -222,6 +222,10 @@ constexpr FloatOption kFloats[] = {
     {"mouse_vertical_sensitivity", &Options::mouse_vertical_sensitivity},
     {"aim_horizontal_sensitivity", &Options::aim_horizontal_sensitivity},
     {"aim_vertical_sensitivity", &Options::aim_vertical_sensitivity},
+    {"pad_horizontal_sensitivity", &Options::pad_horizontal_sensitivity},
+    {"pad_vertical_sensitivity", &Options::pad_vertical_sensitivity},
+    {"pad_aim_horizontal_sensitivity", &Options::pad_aim_horizontal_sensitivity},
+    {"pad_aim_vertical_sensitivity", &Options::pad_aim_vertical_sensitivity},
 };
 
 // what the options list cannot hold

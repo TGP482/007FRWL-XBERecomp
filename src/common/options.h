@@ -42,6 +42,11 @@ struct Options {
     // in the sniper scope, lock on fine aim and over the shoulder aim, times the sensitivity above
     float aim_horizontal_sensitivity = 1.0f;
     float aim_vertical_sensitivity = 1.0f;
+    // the right stick's turn, then in the same views times it
+    float pad_horizontal_sensitivity = 1.0f;
+    float pad_vertical_sensitivity = 1.0f;
+    float pad_aim_horizontal_sensitivity = 1.0f;
+    float pad_aim_vertical_sensitivity = 1.0f;
     uint32_t msaa = 0;  // samples a pixel of the scene, 0 off
     bool smaa = false;  // over the finished frame, HUD included; combines with msaa
     uint32_t draw_distance = 1;  // LOD and object distance multiplier, 1 the game's
