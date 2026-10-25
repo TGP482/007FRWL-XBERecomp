@@ -24,6 +24,8 @@ constexpr Entry kEntries[] = {
     {"CONTROLLER", {u"Manette", u"Controller", u"Controller", u"Mando"}},
     {"GENERAL", {u"Général", u"Allgemein", u"Generale", u"General"}},
     {"BUTTONS", {u"Boutons", u"Tasten", u"Pulsanti", u"Botones"}},
+    {"DEADZONE", {u"Zone morte", u"Totzone", u"Zona morta", u"Zona muerta"}},
+    {"VIBRATION STRENGTH", {u"Intensité des vibrations", u"Vibrationsstärke", u"Intensità della vibrazione", u"Intensidad de la vibración"}},
     {"GYRO", {u"Gyroscope", u"Gyroskop", u"Giroscopio", u"Giroscopio"}},
     {"GYRO AIMING", {u"Visée gyroscopique", u"Gyro-Zielen", u"Mira giroscopica", u"Apuntado giroscópico"}},
     {"GYRO SENSITIVITY", {u"Sensibilité du gyroscope", u"Gyro-Empfindlichkeit", u"Sensibilità del giroscopio", u"Sensibilidad del giroscopio"}},

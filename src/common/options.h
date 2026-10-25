@@ -18,6 +18,10 @@ struct PlayerPort {
     int pad = -1;  // controller slot 0 to 3, -1 for none
 };
 inline constexpr int kPlayers = 4;  // the console's controller ports
+inline constexpr float kGameDeadZone = 0.05f;  // per stick axis, the input manager's +0x180 set at 0x352396
+inline constexpr float kMinDeadZone = 0.1f;
+inline constexpr uint32_t kMinVibration = 10;
+inline constexpr uint32_t kMaxVibration = 200;
 
 struct Options {
     bool skip_intros = false;
@@ -49,6 +53,8 @@ struct Options {
     float pad_vertical_sensitivity = 1.0f;
     float pad_aim_horizontal_sensitivity = 1.0f;
     float pad_aim_vertical_sensitivity = 1.0f;
+    float pad_dead_zone = 0.0f;  // per stick axis, 0 the game's own
+    uint32_t vibration_strength = 100;  // percent of the game's rumble; the game has its own off
     gyro::Settings gyro;  // the controller's gyro turns player 1's view, beside the right stick
     uint32_t msaa = 0;  // samples a pixel of the scene, 0 off
     bool smaa = false;  // over the finished frame, HUD included; combines with msaa

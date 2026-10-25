@@ -127,6 +127,25 @@ input::Pad SlotPad(int port, int slot, const input::Pad& own) {
     return slot == port ? own : RawPad(slot);
 }
 
+// The game drops a stick axis inside 0.05 of full: the axis is moved so that zone starts where the chosen one does
+int16_t MoveDeadZone(int16_t value, float zone) {
+    constexpr float kStickMax = 32767.0f;
+    float v = std::min(std::abs(float(value)) / kStickMax, 1.0f);
+    if (v <= zone) return 0;
+    float out = (kGameDeadZone + (v - zone) / (1.0f - zone) * (1.0f - kGameDeadZone)) * kStickMax;
+    return int16_t(std::lround(value < 0 ? -out : out));
+}
+
+void ApplyDeadZone(input::Pad& pad) {
+    float zone = Opt().pad_dead_zone;
+    if (zone <= 0.0f) return;
+    for (int16_t* axis : {&pad.lx, &pad.ly, &pad.rx, &pad.ry}) *axis = MoveDeadZone(*axis, zone);
+}
+
+uint16_t ScaleMotor(uint16_t speed) {
+    return uint16_t(std::min<uint32_t>(speed * Opt().vibration_strength / 100, 0xFFFF));
+}
+
 bool SlotOwned(int slot) {
     const auto& players = Opt().players;
     return std::any_of(players.begin(), players.end(), [slot](const PlayerPort& p) { return p.pad == slot; });
@@ -138,6 +157,7 @@ void Pad(int port, input::Pad& pad) {
     if (g_raw || port < 0 || port >= kPlayers) return;
     PlayerPort player = Opt().players[size_t(port)];
     pad = SlotPad(port, player.pad, pad);
+    ApplyDeadZone(pad);
     if (player.keyboard) input::SeenPad(port, pad);
     input::RemapPad(port, pad);
     if (player.keyboard) pad.connected = true;
@@ -158,6 +178,8 @@ void Rumble(int port, uint16_t& left, uint16_t& right) {
         left = 0;
         right = 0;
     }
+    left = ScaleMotor(left);
+    right = ScaleMotor(right);
     if (player.pad >= 0) g_motors[size_t(player.pad)] = uint32_t(left) << 16 | right;
     if (player.pad >= 0 && player.pad != port) RawRumble(player.pad, left, right);
     uint32_t motors = SlotOwned(port) ? g_motors[size_t(port)].load() : 0;
@@ -226,6 +248,7 @@ constexpr FloatOption kFloats[] = {
     {"pad_vertical_sensitivity", &Options::pad_vertical_sensitivity},
     {"pad_aim_horizontal_sensitivity", &Options::pad_aim_horizontal_sensitivity},
     {"pad_aim_vertical_sensitivity", &Options::pad_aim_vertical_sensitivity},
+    {"pad_dead_zone", &Options::pad_dead_zone},
 };
 
 // what the options list cannot hold
@@ -239,6 +262,9 @@ void Load(const void* table) {
     // files from before the split have the one sensitivity
     bool split = settings.contains("mouse_vertical_sensitivity");
     if (!split) options.mouse_vertical_sensitivity = options.mouse_sensitivity;
+    float zone = options.pad_dead_zone;
+    options.pad_dead_zone = zone > 0.0f ? std::clamp(zone, kMinDeadZone, 1.0f) : 0.0f;
+    options.vibration_strength = std::clamp(options.vibration_strength, kMinVibration, kMaxVibration);
     float gyro = float(settings["gyro_sensitivity"].value_or(double(options.gyro.sensitivity)));
     if (std::isfinite(gyro)) options.gyro.sensitivity = gyro;
     options.monitor = settings["monitor"].value_or(options.monitor);
@@ -292,6 +318,7 @@ const app::GameInfo app::kGame = {
     .options = {                            // game settings kept in the settings file
         {"invert_mouse", &game::Opt().invert_mouse, nullptr},
         {"invert_mouse_x", &game::Opt().invert_mouse_x, nullptr},
+        {"vibration_strength", nullptr, &game::Opt().vibration_strength},
         {"gyro_aiming", &game::Opt().gyro.enabled, nullptr},
         {"gyro_axis", nullptr, &game::Opt().gyro.axis},
         {"gyro_button", nullptr, &game::Opt().gyro.button},

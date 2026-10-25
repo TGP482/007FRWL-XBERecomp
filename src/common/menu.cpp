@@ -443,6 +443,32 @@ std::string StepSensitivity(Settings&, int step) {
     return StepTenths(game::Opt().*Value, step);
 }
 
+// the game's own, then 0.1 to 1.0 in tenths
+std::string StepDeadZone(Settings&, int step) {
+    constexpr int kSlots = 11;
+    float& zone = game::Opt().pad_dead_zone;
+    int slot = zone > 0.0f ? int(std::lround(zone * kTenthsPerUnit)) : 0;
+    slot = StepIndex(slot, step, kSlots);
+    zone = float(slot) / kTenthsPerUnit;
+    char text[24];
+    if (slot == 0) std::snprintf(text, sizeof(text), "%.2f (DEFAULT)", game::kGameDeadZone);
+    else std::snprintf(text, sizeof(text), "%.1f", zone);
+    return text;
+}
+
+// 10% to 200% in steps of 10
+std::string StepVibration(Settings&, int step) {
+    constexpr uint32_t kStep = 10;
+    constexpr int kSlots = int(game::kMaxVibration / kStep);
+    uint32_t& strength = game::Opt().vibration_strength;
+    if (step) {
+        int slot = std::clamp(int(strength / kStep), 1, kSlots) - 1;
+        strength = uint32_t(StepIndex(slot, step, kSlots) + 1) * kStep;
+    }
+    if (strength == game::Options{}.vibration_strength) return "100% (DEFAULT)";
+    return std::to_string(strength) + "%";
+}
+
 std::string StepGyroSensitivity(Settings&, int step) { return StepTenths(game::Opt().gyro.sensitivity, step); }
 
 // one of names, stepped first
@@ -628,6 +654,8 @@ enum RowId {
     kGyroButtonRow,
     kGyroButtonModeRow,
     kGyroCalibrateRow,
+    kDeadZoneRow,
+    kVibrationRow,
 };
 
 // in RowId order
@@ -682,6 +710,8 @@ constexpr StepFn kSteps[] = {
     StepGyroButton,
     StepGyroButtonMode,
     StepGyroCalibrate,
+    StepDeadZone,
+    StepVibration,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -768,6 +798,8 @@ const std::vector<Row>& ControllerRows() {
             {Kind::Value, kPadVerticalRow, "CONTROLLER VERTICAL SENSITIVITY"},
             {Kind::Value, kPadAimHorizontalRow, "AIM HORIZONTAL SENSITIVITY"},
             {Kind::Value, kPadAimVerticalRow, "AIM VERTICAL SENSITIVITY"},
+            {Kind::Value, kDeadZoneRow, "DEADZONE"},
+            {Kind::Value, kVibrationRow, "VIBRATION STRENGTH"},
             {Kind::Value, kPadCameraCentringRow, "CAMERA CENTRING"},
             {Kind::Value, kPadFreeAimRow, "FREE AIM"},
             {Kind::Heading, -1, "GYRO"},
@@ -1150,6 +1182,8 @@ void RestoreDefaults(int page) {
         game::Opt().pad_aim_vertical_sensitivity = defaults.pad_aim_vertical_sensitivity;
         game::Opt().pad_camera_centring = defaults.pad_camera_centring;
         game::Opt().pad_free_aim = defaults.pad_free_aim;
+        game::Opt().pad_dead_zone = defaults.pad_dead_zone;
+        game::Opt().vibration_strength = defaults.vibration_strength;
         game::Opt().gyro = defaults.gyro;
         input::ResetPadBindings();
     } else {
