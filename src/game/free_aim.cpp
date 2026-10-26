@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstring>
 #include <iterator>
@@ -22,6 +23,7 @@ constexpr uint32_t kLinkOffset = 0x20;  // object links point 0x20 into the obje
 
 // the player
 constexpr uint32_t kPlayerVtable = 0x6A3D00;
+constexpr uint32_t kMultiplayerVtable = 0x6B31A8;  // the multiplayer player built on it, 0x1D4D20
 constexpr uint32_t kPlayerPort = 0xB24;
 constexpr uint32_t kPlayerAimFlags = 0x5E8;
 constexpr uint32_t kAimFlagAiming = 0x001;  // shots go at the aim point
@@ -130,15 +132,36 @@ struct Vec {
     float z;
 };
 
-uint32_t g_player = 0;  // in the throw state through free aim
-uint32_t g_frame = 0;
-uint32_t g_firing_player = 0;  // in the firing state through free aim
-uint32_t g_firing_frame = 0;
+// a player seen in a free aim state, and the frame; one for each port, split screen players aim at once
+struct Seen {
+    uint32_t player = 0;
+    uint32_t frame = 0;
+};
+constexpr uint32_t kPorts = 4;
+std::array<Seen, kPorts> g_aiming;  // in the throw state through free aim
+std::array<Seen, kPorts> g_firing;  // in the firing state through free aim
 // the aim update runs inside the firing state, which plays its own animation and moves the player itself
 bool g_aim_while_firing = false;
 
+bool IsPlayer(uint32_t object) {
+    uint32_t vtable = object ? R32(object) : 0;
+    return vtable == kPlayerVtable || vtable == kMultiplayerVtable;
+}
+
+Seen& SeenFor(std::array<Seen, kPorts>& seen, uint32_t player) {
+    return seen[std::min(R32(player + kPlayerPort), kPorts - 1)];
+}
+
+void LatchSeen(std::array<Seen, kPorts>& seen, uint32_t player) { SeenFor(seen, player) = {player, R32(kFrameCount)}; }
+
+// seen this frame or the last
+bool SeenLately(std::array<Seen, kPorts>& seen, uint32_t player) {
+    const Seen& at = SeenFor(seen, player);
+    return at.player == player && R32(kFrameCount) - at.frame <= 1;
+}
+
 bool KeyboardPlayer(uint32_t player) {
-    return player && R32(player) == kPlayerVtable && int(R32(player + kPlayerPort)) == input::KeyboardPort();
+    return IsPlayer(player) && int(R32(player + kPlayerPort)) == input::KeyboardPort();
 }
 
 bool Answers(X86Context& ctx, uint32_t item, uint32_t name) {
@@ -177,7 +200,7 @@ bool SceneShown(uint32_t player) {
 
 // the keyboard's port with it used last takes the mouse setting, a controller its own
 bool FreeAimOn(uint32_t player) {
-    if (!player || R32(player) != kPlayerVtable) return false;
+    if (!IsPlayer(player)) return false;
     bool mouse = KeyboardPlayer(player) && input::KeyboardActive();
     return mouse ? game::Opt().free_aim : game::Opt().pad_free_aim;
 }
@@ -189,10 +212,10 @@ bool FreeAimGun(X86Context& ctx, uint32_t player, uint32_t gun) {
 
 // the throw state check stops running while each shot puts the gun through the firing state
 bool InFreeAim(uint32_t player) {
-    if (!player || CutscenePlaying()) return false;
-    uint32_t now = R32(kFrameCount);
-    bool aiming = player == g_player && now - g_frame <= 1;
-    bool firing = player == g_firing_player && now - g_firing_frame <= 1;
+    // a shooter can be anyone: only players carry a port
+    if (!IsPlayer(player) || CutscenePlaying()) return false;
+    bool aiming = SeenLately(g_aiming, player);
+    bool firing = SeenLately(g_firing, player);
     return (aiming || firing) && !SceneShown(player);
 }
 
@@ -302,8 +325,7 @@ X86_FUNC(sub_00015CA4) {
     if (!lend) return;
     W32(gun + kGunFlags, flags);
     if (!(ctx.eax & 0xFF)) return;
-    g_player = player;
-    g_frame = R32(kFrameCount);
+    LatchSeen(g_aiming, player);
 }
 
 // throw state fire check, thiscall on the state: the gun fires there as the rocket launcher does. The check reads
@@ -332,8 +354,7 @@ X86_FUNC(sub_000137C9) {
     uint32_t player = R32(state + kStatePlayer);
     bool aim_item = R32(ctx.esp + kActionId) == kActionAimItem;
     if (aim_item && FreeAimGun(ctx, player, CurrentGun(ctx, player))) {
-        g_firing_player = player;
-        g_firing_frame = R32(kFrameCount);
+        LatchSeen(g_firing, player);
         g_aim_while_firing = true;
         ctx.ecx = state;
         CallGuest(ctx, kAimUpdate, {R32(ctx.esp + kActionSeconds)});
@@ -352,7 +373,7 @@ X86_FUNC(sub_00015D6C) {
         Return(ctx, 0, 0);
         return;
     }
-    bool firing = player == g_firing_player && R32(kFrameCount) - g_firing_frame <= 1;
+    bool firing = SeenLately(g_firing, player);
     if (!firing) {
         __imp__sub_00015D6C(ctx, base);
         return;

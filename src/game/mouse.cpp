@@ -11,6 +11,8 @@
 // Mouse look: the counts turn each view by an angle this frame, past the smoothing the game gives the stick.
 // Each view's signs follow its own stick, so the mouse turns it the way the stick does.
 
+bool MenuPageShown();  // menu_cursor.cpp
+
 using namespace kernel;
 
 namespace {
@@ -71,7 +73,9 @@ struct Motion {
 
 Motion Take(View view) {
     if (R32(kGameMode) != kModeRunning) return {};
-    if (std::optional<input::MouseMove> move = input::TakeMouse()) AddToShares(g_shares, *move);
+    // the multiplayer pause leaves the world running: asking would mark play and hide its cursor
+    std::optional<input::MouseMove> move = MenuPageShown() ? std::nullopt : input::TakeMouse();
+    if (move) AddToShares(g_shares, *move);
     GatherGyro();
     return {TakeShare(g_shares[size_t(view)]), TakeShare(g_gyro_shares[size_t(view)])};
 }

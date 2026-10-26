@@ -21,6 +21,7 @@ constexpr uint32_t kPlayersList = 0x04;
 constexpr uint32_t kPlayersCount = 0x0C;
 constexpr uint32_t kOwnerObject = 0x08;
 constexpr uint32_t kPlayerVtable = 0x6A3D00;
+constexpr uint32_t kMultiplayerVtable = 0x6B31A8;  // the multiplayer player built on it, 0x1D4D20
 constexpr uint32_t kCurrentGun = 0x20311;  // thiscall on the player, the item in hand or 0
 constexpr uint32_t kPlayerFlags = 0x5E4;
 constexpr uint32_t kFlagReloading = 0x10;  // set while the reload state runs, cleared when it ends
@@ -70,7 +71,8 @@ uint32_t PortPlayer(X86Context& ctx, int port) {
     ctx.ecx = owner;
     uint32_t object = CallGuest(ctx, R32(R32(owner) + kOwnerObject), {});
     uint32_t player = Query(ctx, object, kPlayerName);
-    return player && R32(player) == kPlayerVtable ? player : 0;
+    uint32_t vtable = player ? R32(player) : 0;
+    return vtable == kPlayerVtable || vtable == kMultiplayerVtable ? player : 0;
 }
 
 uint32_t HeldGun(X86Context& ctx, uint32_t player) {
