@@ -77,6 +77,7 @@ float g_letterbox = 0;     // share of the shown film height that is letterbox
 bool g_menu = false;       // inside the Flash render
 bool g_bar = false;        // a side bar is being drawn
 std::chrono::steady_clock::time_point g_menu_film_shown;
+std::chrono::steady_clock::time_point g_film_shown;
 
 struct Span {
     float left;
@@ -202,6 +203,11 @@ bool InFrontEnd() {
     return open && std::chrono::steady_clock::now() - g_menu_film_shown < kRecent;
 }
 
+bool FilmShown() {
+    constexpr auto kRecent = std::chrono::milliseconds(250);
+    return std::chrono::steady_clock::now() - g_film_shown < kRecent;
+}
+
 // tree walk 0x3583B0, before a widget's Draw: esi the widget, [esp] its screen position
 void HudWidgetBegin(X86Context& ctx, uint8_t*) {
     if (!game::Wide()) return;
@@ -249,6 +255,7 @@ X86_EXTERN_FUNC(__imp__sub_00438370);
 X86_FUNC(sub_00438370) {
     bool menu = G<float>(ctx.ecx + kQuadFilmWidth) == kMenuFilmWidth;
     if (menu) g_menu_film_shown = std::chrono::steady_clock::now();
+    else g_film_shown = std::chrono::steady_clock::now();
     if (game::Wide()) g_film = menu ? Film::Menu : Film::Shown;
     __imp__sub_00438370(ctx, base);
     g_film = Film::None;

@@ -20,6 +20,7 @@
 #include "common/menu.h"
 #include "common/mouse_keyboard.h"
 #include "game/flash.h"
+#include "game/hud.h"
 #include "game/menu_ports.h"
 #include "game/options_menu.h"
 #include "game/pause_tabs.h"
@@ -693,8 +694,8 @@ void UpdateMenu(uint32_t screen) {
 }
 
 void UpdateCursor(X86Context& ctx) {
-    // the attache case takes the bound keys and mouse buttons as play does
-    uint32_t screen = CaseShown() ? 0 : MenuScreen();
+    // the attache case takes the bound keys and mouse buttons as play does; a film covers the page behind it
+    uint32_t screen = CaseShown() || FilmShown() ? 0 : MenuScreen();
     UpdateMenu(screen);
     bool row = screen && R32(screen + kScreenRows) == 1 && R32(screen + kScreenColumns) > 1;
     input::SetMenuWheelAcross(row);
