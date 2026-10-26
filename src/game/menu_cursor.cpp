@@ -104,6 +104,8 @@ const ItemName kItemNames[] = {
 // Its page is told apart by the clips beside them
 constexpr int kPauseTabDepths[] = {124, 85, 46, 7};
 constexpr const char* kPauseMarks[] = {"options_mc", "upgrades_mc", "border_mc"};
+// The multiplayer pause page's two tabs are known by their labels' text, score first
+constexpr const char* kMultiplayerTabTexts[] = {"$PAUSE_SCORE", "$PAUSE_OPTIONS"};
 // The dossier's tabs are named "tab1" to "tab4", the focused one "on", but its timeline gives some the wrong number.
 // Each keeps its row, so they are taken top to bottom
 constexpr const char* kTabPrefix = "tab";
@@ -177,6 +179,7 @@ struct CursorState {
     std::map<uint32_t, Box> resting;
 };
 CursorState g_state;
+bool g_page_shown = false;  // this tick, without the grace between pages
 
 uint64_t NowMs() {
     auto since = std::chrono::steady_clock::now().time_since_epoch();
@@ -331,6 +334,38 @@ std::optional<Items> PauseTabs(const std::vector<uint32_t>& children, uint32_t c
     return Items{clips};
 }
 
+// a label sprite whose text field has the text as the movie gives it, before the language
+bool LabelSays(uint32_t clip, const char* text) {
+    for (uint32_t child : Children(clip)) {
+        uint32_t field = EditTextField(child);
+        uint32_t movie_text = field ? R32(field + kFieldText) : 0;
+        if (Readable(movie_text) && strcmp(Text(movie_text), text) == 0) return true;
+    }
+    return false;
+}
+
+uint32_t LabelSaying(const std::vector<uint32_t>& clips, const char* text, int depth) {
+    for (uint32_t clip : clips) {
+        if (LabelSays(clip, text)) return clip;
+    }
+    if (depth == 0) return 0;
+    for (uint32_t clip : clips) {
+        if (uint32_t label = LabelSaying(Children(clip), text, depth - 1)) return label;
+    }
+    return 0;
+}
+
+std::optional<Items> MultiplayerPauseTabs(const std::vector<uint32_t>& children, uint32_t count) {
+    if (count != std::size(kMultiplayerTabTexts)) return std::nullopt;
+    std::vector<uint32_t> clips;
+    for (const char* text : kMultiplayerTabTexts) {
+        uint32_t label = LabelSaying(children, text, kSearchDepth);
+        if (!label) return std::nullopt;
+        clips.push_back(label);
+    }
+    return Items{clips};
+}
+
 bool IsTab(const char* name) {
     size_t prefix = strlen(kTabPrefix);
     if (!name || strncmp(name, kTabPrefix, prefix) != 0 || !isdigit(uint8_t(name[prefix]))) return false;
@@ -374,6 +409,7 @@ std::optional<Items> FindItems(uint32_t screen) {
     std::vector<uint32_t> parents{Resolve(Text(path))};
     if (auto tabs = PauseTabs(Children(parents.front()), count)) return tabs;
     if (auto tabs = DossierTabs(Children(parents.front()), count)) return tabs;
+    if (auto tabs = MultiplayerPauseTabs(Children(parents.front()), count)) return tabs;
     for (int depth = 0; depth < kSearchDepth && parents.front(); depth++) {
         std::vector<uint32_t> next;
         for (uint32_t parent : parents) {
@@ -696,6 +732,7 @@ void UpdateMenu(uint32_t screen) {
 void UpdateCursor(X86Context& ctx) {
     // the attache case takes the bound keys and mouse buttons as play does; a film covers the page behind it
     uint32_t screen = CaseShown() || FilmShown() ? 0 : MenuScreen();
+    g_page_shown = screen != 0;
     UpdateMenu(screen);
     bool row = screen && R32(screen + kScreenRows) == 1 && R32(screen + kScreenColumns) > 1;
     input::SetMenuWheelAcross(row);
@@ -729,6 +766,8 @@ std::vector<MenuPorts> ActiveMenuPorts() {
     }
     return menus;
 }
+
+bool MenuPageShown() { return g_page_shown; }
 
 // a menu page with a grid of items takes the input; a page whose script takes the codes itself has none
 bool MenuItemsShown() {
