@@ -271,6 +271,8 @@ void Load(const void* table) {
     float zone = options.pad_dead_zone;
     options.pad_dead_zone = zone > 0.0f ? std::clamp(zone, kMinDeadZone, 1.0f) : 0.0f;
     options.vibration_strength = std::clamp(options.vibration_strength, kMinVibration, kMaxVibration);
+    options.brightness = std::min(options.brightness, kMaxPicture);
+    options.contrast = std::min(options.contrast, kMaxPicture);
     float gyro = float(settings["gyro_sensitivity"].value_or(double(options.gyro.sensitivity)));
     if (std::isfinite(gyro)) options.gyro.sensitivity = gyro;
     options.monitor = settings["monitor"].value_or(options.monitor);
@@ -345,6 +347,8 @@ const app::GameInfo app::kGame = {
         {"fps_counter", &game::Opt().fps_counter, nullptr},
         {"hdr_output", &game::Opt().hdr_output, nullptr},
         {"colour_blind", nullptr, &game::Opt().colour_blind},
+        {"brightness", nullptr, &game::Opt().brightness},
+        {"contrast", nullptr, &game::Opt().contrast},
         {"ambient_occlusion", nullptr, &game::Opt().ambient_occlusion},
         {"audio_output", nullptr, &game::Opt().audio_output},
         {"master_volume", nullptr, &game::Opt().master_volume},

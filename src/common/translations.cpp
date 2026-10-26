@@ -61,6 +61,8 @@ constexpr Entry kEntries[] = {
     {"VERTICAL SYNC", {u"Synchro verticale", u"V-Sync", u"Sincronia verticale", u"Sincronismo vertical"}},
     {"FMV SCALE", {u"Échelle des cinématiques", u"Videoskalierung", u"Scala dei filmati", u"Escala de vídeos"}},
     {"FILL", {u"Remplir", u"Füllen", u"Riempi", u"Rellenar"}},
+    {"BRIGHTNESS", {u"Luminosité", u"Helligkeit", u"Luminosità", u"Brillo"}},
+    {"CONTRAST", {u"Contraste", u"Kontrast", u"Contrasto", u"Contraste"}},
     {"COLOUR BLIND MODE", {u"Mode daltonien", u"Farbenblindmodus", u"Modalità daltonismo", u"Modo daltónico"}},
     {"PROTANOPIA", {u"Protanopie", u"Protanopie", u"Protanopia", u"Protanopía"}},
     {"DEUTERANOPIA", {u"Deutéranopie", u"Deuteranopie", u"Deuteranopia", u"Deuteranopía"}},

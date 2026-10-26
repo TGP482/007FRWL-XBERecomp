@@ -352,6 +352,15 @@ std::string StepFmvScale(Settings&, int step) {
     return kFmvScaleNames[StepTable(kFmvScales, game::Opt().fmv_scale, step)];
 }
 
+// 0 to 100 in steps of 1
+template <uint32_t game::Options::*kValue>
+std::string StepPicture(Settings&, int step) {
+    uint32_t& value = game::Opt().*kValue;
+    if (step) value = uint32_t(StepIndex(int(std::min(value, game::kMaxPicture)), step, game::kMaxPicture + 1));
+    std::string text = std::to_string(value);
+    return value == game::Options{}.*kValue ? text + " (DEFAULT)" : text;
+}
+
 std::string StepColourBlind(Settings&, int step) {
     return kColourBlindNames[StepTable(kColourBlindModes, game::Opt().colour_blind, step)];
 }
@@ -676,6 +685,8 @@ enum RowId {
     kTextureReplacementRow,
     kTextureDumpingRow,
     kDumpFormatRow,
+    kBrightnessRow,
+    kContrastRow,
 };
 
 // in RowId order
@@ -735,6 +746,8 @@ constexpr StepFn kSteps[] = {
     StepTextureReplacement,
     StepTextureDumping,
     StepDumpFormat,
+    StepPicture<&game::Options::brightness>,
+    StepPicture<&game::Options::contrast>,
 };
 
 bool Held(int id) { return id == kMonitorRow || id == kDisplayModeRow || id == kResolutionRow; }
@@ -752,6 +765,8 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kResolutionRow, "RESOLUTION"},
     {Kind::Value, kRenderResolutionRow, "RENDER RESOLUTION"},
     {Kind::Value, kFieldOfViewRow, "FIELD OF VIEW"},
+    {Kind::Value, kBrightnessRow, "BRIGHTNESS"},
+    {Kind::Value, kContrastRow, "CONTRAST"},
     {Kind::Value, kVsyncRow, "VERTICAL SYNC"},
     {Kind::Value, kHdrOutputRow, "HDR OUTPUT"},
     {Kind::Value, kMaxFpsRow, "MAX FRAME RATE"},
@@ -1188,6 +1203,8 @@ void RestoreDefaults(int page) {
         game::Opt().hdr_output = defaults.hdr_output;
         game::Opt().fmv_scale = defaults.fmv_scale;
         game::Opt().colour_blind = defaults.colour_blind;
+        game::Opt().brightness = defaults.brightness;
+        game::Opt().contrast = defaults.contrast;
         game::Opt().ambient_occlusion = defaults.ambient_occlusion;
         game::Opt().audio_output = defaults.audio_output;
         game::Opt().master_volume = defaults.master_volume;

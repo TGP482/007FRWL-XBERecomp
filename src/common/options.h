@@ -22,6 +22,7 @@ inline constexpr float kGameDeadZone = 0.05f;  // per stick axis, the input mana
 inline constexpr float kMinDeadZone = 0.1f;
 inline constexpr uint32_t kMinVibration = 10;
 inline constexpr uint32_t kMaxVibration = 200;
+inline constexpr uint32_t kMaxPicture = 100;  // brightness and contrast
 
 struct Options {
     bool skip_intros = false;
@@ -30,6 +31,8 @@ struct Options {
     bool fps_counter = false;
     bool hdr_output = true;  // HDR10 on a display with Windows HDR on
     uint32_t colour_blind = 0;  // 0 off, 1 protanopia, 2 deuteranopia, 3 tritanopia
+    uint32_t brightness = 50;  // 0 to 100 over the game's own brightness, 50 each leaves the picture alone
+    uint32_t contrast = 50;
     bool invert_mouse = false;  // the Y axis
     bool invert_mouse_x = false;
     bool camera_centring = false;  // the chase camera swings back behind Bond on keyboard and mouse

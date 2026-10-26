@@ -1197,7 +1197,9 @@ private:
     ComPtr<ID3D12Resource> lut_;
     D3D12_RESOURCE_STATES lut_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
     uint8_t ramp_[768] = {};
+    bool game_ramp_ = false;  // the game set ramp_
     bool ramp_dirty_ = false;
+    uint32_t picture_set_ = ~0u;  // brightness << 8 | contrast the lookup holds
     bool gamma_ = false;
     Target* bound_rt_ = nullptr;
     Target* bound_ds_ = nullptr;
@@ -4151,18 +4153,38 @@ constexpr int kRampRed = 0;
 constexpr int kRampGreen = 256;
 constexpr int kRampBlue = 512;
 
+uint32_t PictureSetting() { return game::Opt().brightness << 8 | game::Opt().contrast; }
+
+// Brightness and contrast from 0 to 100, 50 each leaves the picture alone. Black and white stay put: contrast is an
+// S curve about mid grey (slope 0.5 to 2), brightness a gamma from 2 to 0.5
+void PictureCurve(uint32_t brightness, uint32_t contrast, uint8_t (&curve)[256]) {
+    float k = std::exp2((float(contrast) - 50.0f) / 50.0f);
+    float g = std::exp2((50.0f - float(brightness)) / 50.0f);
+    for (int i = 0; i < 256; i++) {
+        float x = float(i) / 255.0f;
+        float y = x < 0.5f ? 0.5f * std::pow(2.0f * x, k) : 1.0f - 0.5f * std::pow(2.0f - 2.0f * x, k);
+        float v = std::pow(y, g);
+        curve[i] = uint8_t(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+    }
+}
+
+// the game's ramp from its brightness screen, then the brightness and contrast settings over it
 void D3D12Backend::UploadGammaRamp() {
     constexpr uint32_t kRampBytes = 256 * 4;  // one BGRA texel per ramp entry
     ramp_dirty_ = false;
+    picture_set_ = PictureSetting();
+    uint8_t curve[256];
+    PictureCurve(game::Opt().brightness, game::Opt().contrast, curve);
+    auto shown = [&](int channel, int i) { return curve[game_ramp_ ? ramp_[channel + i] : i]; };
     Alloc a = Upload(kRampBytes + D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
     bool identity = true;
     for (int i = 0; i < 256; i++) {
         uint8_t* p = a.cpu + i * 4;
-        p[0] = ramp_[kRampBlue + i];
-        p[1] = ramp_[kRampGreen + i];
-        p[2] = ramp_[kRampRed + i];
+        p[0] = shown(kRampBlue, i);
+        p[1] = shown(kRampGreen, i);
+        p[2] = shown(kRampRed, i);
         p[3] = 255;
-        identity &= ramp_[kRampRed + i] == i && ramp_[kRampGreen + i] == i && ramp_[kRampBlue + i] == i;
+        identity &= p[0] == i && p[1] == i && p[2] == i;
     }
     gamma_ = !identity;
     Transition(lut_.Get(), lut_state_, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -4522,7 +4544,7 @@ void D3D12Backend::Present(const Surface& front) {
     Target* t = EnsureTarget(front, false);
     if (t && LatchCpuWrite(*t)) UploadTarget(*t, front);
     if (t) Resolve(*t);
-    if (ramp_dirty_) UploadGammaRamp();
+    if (ramp_dirty_ || PictureSetting() != picture_set_) UploadGammaRamp();
     Transition(lut_.Get(), lut_state_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
     // a frame missing draws still on the build threads is not shown, the last whole one stays up: otherwise a new
@@ -4862,6 +4884,7 @@ void D3D12Backend::Capture(Target& t, const char* tag, float mul) {
 
 void D3D12Backend::SetGamma(const uint8_t* ramp) {
     std::memcpy(ramp_, ramp, sizeof(ramp_));
+    game_ramp_ = true;
     ramp_dirty_ = true;
 }
 
