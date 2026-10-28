@@ -497,6 +497,32 @@ at = 0x46D82
 call = "KeepCorpse"
 on_true = 0x46DC1
 
+# door clear tests, each list's node before its actor is read: persistent bodies pass over kept bodies and items
+[[hook]]
+at = 0x106815  # AnimatedDoor, kind 2
+call = "DoorSkipsBody"
+on_true = 0x106860
+
+[[hook]]
+at = 0x106876  # AnimatedDoor, kind 7
+call = "DoorSkipsBody"
+on_true = 0x1068C1
+
+[[hook]]
+at = 0x10AA05  # RotatingDoor, kind 1
+call = "DoorSkipsBody"
+on_true = 0x10AA54
+
+[[hook]]
+at = 0x10AA70  # RotatingDoor, kind 2
+call = "DoorSkipsBody"
+on_true = 0x10AABB
+
+[[hook]]
+at = 0x10AAD1  # RotatingDoor, kind 7
+call = "DoorSkipsBody"
+on_true = 0x10AB1C
+
 # item dropped, before its fade timer is set
 [[hook]]
 at = 0xA6FC5
