@@ -242,6 +242,7 @@ std::atomic<uint32_t> g_press{0};
 std::atomic<uint64_t> g_press_until{0};
 std::atomic<Section> g_section{Section::Foot};
 std::atomic<bool> g_wheel_across{false};
+std::atomic<bool> g_walk_diagonal{false};
 
 // a wheel notch in the menus, pressed on the dpad with a release before the next; pad thread only
 struct WheelStep {
@@ -591,9 +592,12 @@ void SetSlot(std::vector<int>& keys, int vk, int slot) {
 int Axis(bool positive, bool negative) { return int(positive) - int(negative); }
 
 void SetSticks(Pad& pad, const StickKeys& sticks) {
+    int move_x = Axis(sticks.move[kRight], sticks.move[kLeft]);
+    int move_y = Axis(sticks.move[kForward], sticks.move[kBackward]);
     float move = sticks.walk ? kWalkStick : 1.0f;
-    if (int x = Axis(sticks.move[kRight], sticks.move[kLeft])) pad.lx = int16_t(float(x) * move * kFullStick);
-    if (int y = Axis(sticks.move[kForward], sticks.move[kBackward])) pad.ly = int16_t(float(y) * move * kFullStick);
+    g_walk_diagonal = sticks.walk && move_x && move_y;
+    if (move_x) pad.lx = int16_t(float(move_x) * move * kFullStick);
+    if (move_y) pad.ly = int16_t(float(move_y) * move * kFullStick);
     if (int x = Axis(sticks.look[kLookRight], sticks.look[kLookLeft])) pad.rx = int16_t(x * kFullStick);
     if (int y = Axis(sticks.look[kLookUp], sticks.look[kLookDown])) pad.ry = int16_t(y * kFullStick);
 }
@@ -702,6 +706,7 @@ std::optional<MouseMove> TakeMouse() {
 }
 
 void Keyboard(Pad& pad) {
+    g_walk_diagonal = false;
     if (!Active()) {
         g_settle = true;
         return;
@@ -769,6 +774,8 @@ bool LeftButton() { return Active() && !g_settle && Down(VK_LBUTTON); }
 bool CursorShown() { return g_menu && g_keyboard && !Play(); }
 
 bool InPlay() { return Play(); }
+
+bool WalkDiagonal() { return g_walk_diagonal; }
 
 std::optional<Pointer> Cursor() {
     HWND hwnd = HWND(app::Window());

@@ -93,6 +93,12 @@ constexpr MapSection kMapSections[] = {
     {"qcopterplayer", Section::Copter},
 };
 
+// each port's stick lengths (0x34E640), 8 bytes a port, the left stick first: as pushed, then through the response curve
+constexpr uint32_t kStickLength = 0x5F4;
+constexpr uint32_t kStickCurvedLength = 0x634;
+constexpr uint32_t kPortSticks = 8;
+constexpr float kDiagonalToStraight = 0.70710678f;  // 1 / sqrt 2
+
 // how the game asks: held now, or pressed since the last update
 constexpr uint32_t kHeld = 0;
 constexpr uint32_t kPressed = 1;
@@ -177,6 +183,17 @@ std::optional<bool> KeyAnswer(uint32_t port, uint32_t hash, uint32_t mode) {
     return (keys & KeyMask(*answer)) != 0;
 }
 
+// A walking diagonal pushes both axes to the walk share, as less stops Bond; its length is then set to a straight
+// walk's, which the game's speed follows (0x11CBD0)
+void KeepWalkLength() {
+    int port = input::KeyboardPort();
+    uint32_t manager = R32(kInputManager);
+    if (port < 0 || !manager || !input::KeyboardActive() || !input::WalkDiagonal()) return;
+    uint32_t sticks = manager + uint32_t(port) * kPortSticks;
+    G<float>(sticks + kStickLength) *= kDiagonalToStraight;
+    G<float>(sticks + kStickCurvedLength) *= kDiagonalToStraight;
+}
+
 bool KeyPressed(const char* id) {
     int index = input::ActionIndex(id);
     uint64_t pressed = g_keys.now & ~g_keys.before;
@@ -197,6 +214,7 @@ X86_FUNC(sub_0034FEB0) {
     bool on_foot = input::KeyboardActive() && g_section == Section::Foot;
     UpdateAmmoSwap(ctx, on_foot && KeyPressed("switch_ammo"));
     __imp__sub_0034FEB0(ctx, base);
+    KeepWalkLength();
 }
 
 // the action query, thiscall on the input manager (port, hash, mode)

@@ -54,6 +54,7 @@ int ActionIndex(std::string_view id);  // -1 for none
 // the controls the keyboard player has now, from the control map on top of their port
 enum class Section { Foot, Inventory, Car, Jetpack, Copter };
 void SetSection(Section section);  // game thread, each input update
+bool WalkDiagonal();  // the walk key held with two move keys
 
 // the game's own menus
 void SeenPad(int port, const Pad& pad);  // a controller's report before the keys join it: its input hides the cursor
