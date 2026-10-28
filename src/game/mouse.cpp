@@ -93,10 +93,11 @@ bool OnGyroPort(uint32_t player) { return player != 0 && R32(player + kPlayerPor
 input::MouseMove TakeForPlayer(View view, uint32_t player) {
     Motion motion = Take(view);
     input::MouseMove move{};
-    if (OnKeyboardPort(player)) move = motion.mouse;
-    if (Aims(view)) {
-        move.dx *= game::Opt().aim_horizontal_sensitivity;
-        move.dy *= game::Opt().aim_vertical_sensitivity;
+    if (OnKeyboardPort(player)) {
+        const game::Options& o = game::Opt();
+        bool aim = Aims(view);
+        move.dx = motion.mouse.dx * (aim ? o.aim_horizontal_sensitivity : o.mouse_sensitivity);
+        move.dy = motion.mouse.dy * (aim ? o.aim_vertical_sensitivity : o.mouse_vertical_sensitivity);
     }
     if (OnGyroPort(player)) {
         move.dx += motion.gyro.dx;
@@ -114,8 +115,8 @@ struct StickScale {
 StickScale PadScale(View view) {
     const game::Options& o = game::Opt();
     bool aim = Aims(view);
-    float x = o.pad_horizontal_sensitivity * (aim ? o.pad_aim_horizontal_sensitivity : 1.0f);
-    float y = o.pad_vertical_sensitivity * (aim ? o.pad_aim_vertical_sensitivity : 1.0f);
+    float x = aim ? o.pad_aim_horizontal_sensitivity : o.pad_horizontal_sensitivity;
+    float y = aim ? o.pad_aim_vertical_sensitivity : o.pad_vertical_sensitivity;
     return {x, y};
 }
 

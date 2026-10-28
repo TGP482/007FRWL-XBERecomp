@@ -696,8 +696,8 @@ std::optional<MouseMove> TakeMouse() {
     const game::Options& options = game::Opt();
     float sign_x = options.invert_mouse_x ? -1.0f : 1.0f;
     float sign_y = options.invert_mouse ? -1.0f : 1.0f;
-    float dx = float(x) * sign_x * options.mouse_sensitivity;
-    float dy = float(y) * sign_y * options.mouse_vertical_sensitivity;
+    float dx = float(x) * sign_x;
+    float dy = float(y) * sign_y;
     return MouseMove{dx, dy};
 }
 
