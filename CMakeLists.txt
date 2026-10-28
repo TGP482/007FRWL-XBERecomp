@@ -23,11 +23,12 @@ include(${SDK}/cmake/XbeRecomp.cmake)
 
 file(GLOB XBE_HOST_SOURCES CONFIGURE_DEPENDS src/*/*.cpp)
 list(FILTER XBE_HOST_SOURCES EXCLUDE REGEX "/src/game/")
-# SDL's headers go to the gyro code too (SDL is linked LINK_ONLY)
-set_source_files_properties(src/common/gyro.cpp PROPERTIES INCLUDE_DIRECTORIES "${sdl3_SOURCE_DIR}/include")
-# src/d3d, src/dsound, src/audio and src/common/game_files.cpp replace the SDK's Direct3D, renderer, DirectSound,
-# audio output and game finder
-list(FILTER XBE_RUNTIME_SOURCES EXCLUDE REGEX "/(xdk/dsound|xdk/d3d8|gpu/d3d12|audio/xaudio2|app/game_files)\\.cpp$")
+# SDL's headers go to the gyro code and the compiler window too (SDL is linked LINK_ONLY)
+set_source_files_properties(src/common/gyro.cpp src/app/game_code.cpp
+                            PROPERTIES INCLUDE_DIRECTORIES "${sdl3_SOURCE_DIR}/include")
+# src/d3d, src/dsound, src/audio, src/app/game_code.cpp and src/common/game_files.cpp replace the SDK's Direct3D,
+# renderer, DirectSound, audio output, game code window and game finder
+list(FILTER XBE_RUNTIME_SOURCES EXCLUDE REGEX "/(xdk/dsound|xdk/d3d8|gpu/d3d12|audio/xaudio2|app/game_code|app/game_files)\\.cpp$")
 
 # partitions as xbe_symbols wrote them into config/game.toml
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS config/game.toml)
