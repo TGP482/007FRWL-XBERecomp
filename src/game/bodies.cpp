@@ -156,13 +156,12 @@ bool KeepDroppedItem(X86Context& ctx, uint8_t*) {
     return true;
 }
 
-// door clear tests (AnimatedDoor 0x1067E0, RotatingDoor 0x10A9D0), edi the node of an actor list: a door opens only
-// with no actor within its radius. True passes over a kept body or item, which the console deletes soon after
-bool DoorSkipsBody(X86Context& ctx, uint8_t*) {
-    uint32_t actor = R32(ctx.edi);
-    auto kept_item = [actor](const Kept& item) { return item.actor == actor; };
-    return g_poses.contains(actor) || std::any_of(g_items.begin(), g_items.end(), kept_item);
-}
+// door close tests (AnimatedDoor 0x1067E0, RotatingDoor 0x10A9D0), edi the node of a group's actor list: a door
+// closes only with no actor within its radius. True passes over a kept body, which the console deletes soon after
+bool DoorSkipsBody(X86Context& ctx, uint8_t*) { return g_poses.contains(R32(ctx.edi)); }
+
+// AnimatedDoor use test 0x106920, edi a sentient actor: one beside the door hides its prompt
+bool DoorUseSkipsBody(X86Context& ctx, uint8_t*) { return g_poses.contains(ctx.edi); }
 
 // actor destructor, thiscall: a deleted body or item leaves the kept lists
 X86_EXTERN_FUNC(__imp__sub_0033C220);

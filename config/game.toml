@@ -497,7 +497,7 @@ at = 0x46D82
 call = "KeepCorpse"
 on_true = 0x46DC1
 
-# door clear tests, each list's node before its actor is read: persistent bodies pass over kept bodies and items
+# door close tests, each list's node before its actor is read: persistent bodies pass over kept bodies
 [[hook]]
 at = 0x106815  # AnimatedDoor, kind 2
 call = "DoorSkipsBody"
@@ -522,6 +522,12 @@ on_true = 0x10AABB
 at = 0x10AAD1  # RotatingDoor, kind 7
 call = "DoorSkipsBody"
 on_true = 0x10AB1C
+
+# door use test, each sentient actor before its distance is taken: a kept body never hides the prompt
+[[hook]]
+at = 0x1069AC
+call = "DoorUseSkipsBody"
+on_true = 0x106A54
 
 # item dropped, before its fade timer is set
 [[hook]]

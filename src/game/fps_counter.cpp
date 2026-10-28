@@ -81,7 +81,7 @@ constexpr CornerPlace kTopLeftPlace = {0.009f, 0.016f, 0.6f, kAlignLeft, kWhite,
 constexpr CornerPlace kTopRightPlace = {0.94f, 0.07f, 0.8f, kAlignRight, kWhite, true};
 constexpr CornerPlace kBottomRightPlace = {0.95f, 0.935f, 0.6f, kAlignRight, kGrey, false};
 
-constexpr char kWatermark[] = "XBE Recomp V1";
+constexpr char kWatermark[] = "XBE Recomp V2";
 
 // memory the text manager reads: the position, then the text
 constexpr uint32_t kScratchText = 8;
