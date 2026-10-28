@@ -29,6 +29,7 @@ struct PadAction {
     const char* id;
     const char* label;
     int button;  // its control, also the button it has by default
+    bool car = false;
 };
 // D-pad left and right and the left thumb are on no action and keep their own controls
 constexpr PadAction kPadActions[] = {
@@ -45,14 +46,24 @@ constexpr PadAction kPadActions[] = {
     {"pause", "PAUSE MENU", 12},
     {"objectives", "OBJECTIVES", 13},
     {"reset_camera", "RESET CAMERA", 15},
+    // AstonMartinPlayerDriver: Y held is the tire slasher, pressed it exits
+    {"car_accelerate", "ACCELERATE", 0, true},
+    {"car_brake", "BRAKE / REVERSE", 2, true},
+    {"car_handbrake", "HANDBRAKE", 1, true},
+    {"car_fire", "FIRE WEAPON", 7, true},
+    {"car_target_lock", "TARGET LOCK", 6, true},
+    {"car_cycle_weapon", "CYCLE WEAPON", 5, true},
+    {"car_exit", "TIRE SLASHER / EXIT VEHICLE", 3, true},
 };
 constexpr size_t kCount = std::size(kPadActions);
 
 std::mutex g_lock;
 std::array<int, kCount> g_binds{};  // each action's physical button, -1 none
-// what a physical button presses in play: the control plus one, -1 nothing, 0 its own control
-std::array<std::atomic<int>, kPadButtons> g_map{};
+// what a physical button presses in play: the control plus one, -1 nothing, 0 its own control; on foot, then driving
+using ButtonMap = std::array<std::atomic<int>, kPadButtons>;
+std::array<ButtonMap, 2> g_maps{};
 std::array<std::atomic<uint32_t>, kPorts> g_held{};  // by port, before the remap
+std::array<std::atomic<bool>, kPorts> g_driving{};
 
 uint32_t HeldButtons(const Pad& pad) {
     uint32_t held = 0;
@@ -69,14 +80,30 @@ int ButtonNamed(const std::string& name) {
     return -1;
 }
 
-void ApplyPadBinds() {
+bool CarControl(int control) {
+    return std::ranges::any_of(kPadActions, [control](const PadAction& a) { return a.car && a.button == control; });
+}
+
+// the car keeps the on foot binds of the controls it does not use
+bool InMap(const PadAction& action, bool car) { return car ? action.car || !CarControl(action.button) : !action.car; }
+
+void ApplyMap(bool car) {
+    ButtonMap& map = g_maps[car];
     for (int b = 0; b < kPadButtons; b++) {
-        bool stock = std::ranges::any_of(kPadActions, [b](const PadAction& a) { return a.button == b; });
-        g_map[size_t(b)] = stock ? -1 : 0;
+        bool stock = std::ranges::any_of(kPadActions, [b, car](const PadAction& a) {
+            return InMap(a, car) && a.button == b;
+        });
+        map[size_t(b)] = stock ? -1 : 0;
     }
+    // the car's binds come last, so they win a button an on foot bind also has
     for (size_t i = 0; i < kCount; i++) {
-        if (g_binds[i] >= 0) g_map[size_t(g_binds[i])] = kPadActions[i].button + 1;
+        if (InMap(kPadActions[i], car) && g_binds[i] >= 0) map[size_t(g_binds[i])] = kPadActions[i].button + 1;
     }
+}
+
+void ApplyPadBinds() {
+    ApplyMap(false);
+    ApplyMap(true);
 }
 
 // the saved binds, stock ones left out; under g_lock
@@ -100,7 +127,8 @@ std::span<const Action> PadActions() {
     static const auto list = [] {
         std::array<Action, kCount> actions{};
         for (size_t i = 0; i < kCount; i++) {
-            actions[i] = {kPadActions[i].id, kPadActions[i].label, kPadNames[kPadActions[i].button]};
+            const PadAction& a = kPadActions[i];
+            actions[i] = {a.id, a.label, kPadNames[a.button], a.car ? "CAR" : nullptr};
         }
         return actions;
     }();
@@ -117,8 +145,8 @@ void BindPad(size_t action, int button) {
     {
         std::lock_guard lock(g_lock);
         int old = g_binds[action];
-        for (int& b : g_binds) {
-            if (b == button) b = old;
+        for (size_t i = 0; i < kCount; i++) {
+            if (g_binds[i] == button && kPadActions[i].car == kPadActions[action].car) g_binds[i] = old;
         }
         g_binds[action] = button;
         SaveBinds();
@@ -137,11 +165,13 @@ void ResetPadBindings() {
 void LoadPadBindings() {
     std::lock_guard lock(g_lock);
     const auto& saved = game::Opt().pad_buttons;
-    std::array<bool, kPadButtons> taken{};
+    std::array<std::array<bool, kPadButtons>, 2> taken_by{};  // on foot, driving
     for (size_t i = 0; i < kCount; i++) {
-        auto found = saved.find(kPadActions[i].id);
-        int b = found == saved.end() ? kPadActions[i].button : ButtonNamed(found->second);
-        if (b >= 0 && taken[size_t(b)]) b = taken[size_t(kPadActions[i].button)] ? -1 : kPadActions[i].button;
+        const PadAction& a = kPadActions[i];
+        auto& taken = taken_by[a.car];
+        auto found = saved.find(a.id);
+        int b = found == saved.end() ? a.button : ButtonNamed(found->second);
+        if (b >= 0 && taken[size_t(b)]) b = taken[size_t(a.button)] ? -1 : a.button;
         g_binds[i] = b;
         if (b >= 0) taken[size_t(b)] = true;
     }
@@ -152,15 +182,21 @@ void RemapPad(int port, Pad& pad) {
     uint32_t held = HeldButtons(pad);
     if (port >= 0 && port < kPorts) g_held[size_t(port)] = held;
     if (InMenu()) return;
+    bool driving = port >= 0 && port < kPorts && g_driving[size_t(port)];
+    const ButtonMap& map = g_maps[driving];
     Pad out{.connected = pad.connected, .lx = pad.lx, .ly = pad.ly, .rx = pad.rx, .ry = pad.ry};
     for (int b = 0; b < kPadButtons; b++) {
-        int mapped = g_map[size_t(b)];
+        int mapped = map[size_t(b)];
         if (!(held >> b & 1) || mapped < 0) continue;
         int control = mapped ? mapped - 1 : b;
         uint8_t level = b < kAnalogButtons ? pad.analog[b] : kFullPress;
         Press(out, control, level);
     }
     pad = out;
+}
+
+void SetPadDriving(int port, bool driving) {
+    if (port >= 0 && port < kPorts) g_driving[size_t(port)] = driving;
 }
 
 int PressedPadButton() {

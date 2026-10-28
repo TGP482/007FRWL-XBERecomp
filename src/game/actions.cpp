@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "common/mouse_keyboard.h"
+#include "common/pad_binds.h"
 #include "xdk/hle.h"
 
 // The game reads its controls as named actions: each is a pattern of the pad's buttons (a press, a hold of 100 ms)
@@ -192,6 +193,7 @@ X86_FUNC(sub_0034FEB0) {
     g_section = SectionOf(input::KeyboardPort());
     LatchInventory();
     input::SetSection(g_section);
+    for (int port = 0; port < int(kPorts); port++) input::SetPadDriving(port, SectionOf(port) == Section::Car);
     bool on_foot = input::KeyboardActive() && g_section == Section::Foot;
     UpdateAmmoSwap(ctx, on_foot && KeyPressed("switch_ammo"));
     __imp__sub_0034FEB0(ctx, base);

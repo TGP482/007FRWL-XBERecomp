@@ -814,6 +814,18 @@ constexpr Row kSettingsRows[] = {
     {Kind::Value, kDumpFormatRow, "DUMP FORMAT"},
 };
 
+// a bind row for each action: the on foot ones, then each section under its heading
+void AddBindRows(std::vector<Row>& out, std::span<const input::Action> actions, Kind kind) {
+    const char* section = nullptr;
+    for (size_t i = 0; i < actions.size(); i++) {
+        if (actions[i].section != section) {
+            section = actions[i].section;
+            out.push_back({Kind::Heading, -1, section});
+        }
+        out.push_back({kind, int(i), actions[i].label});
+    }
+}
+
 // the mouse rows, then a bind row for each input action
 const std::vector<Row>& InputRows() {
     static const std::vector<Row> list = [] {
@@ -829,16 +841,7 @@ const std::vector<Row>& InputRows() {
             {Kind::Value, kFreeAimRow, "FREE AIM"},
             {Kind::Heading, -1, "KEYBOARD"},
         };
-        std::span<const input::Action> actions = input::Actions();
-        const char* section = nullptr;
-        for (size_t i = 0; i < actions.size(); i++) {
-            // the on foot keys, then each section under its heading
-            if (actions[i].section != section) {
-                section = actions[i].section;
-                out.push_back({Kind::Heading, -1, section});
-            }
-            out.push_back({Kind::Bind, int(i), actions[i].label});
-        }
+        AddBindRows(out, input::Actions(), Kind::Bind);
         return out;
     }();
     return list;
@@ -866,8 +869,7 @@ const std::vector<Row>& ControllerRows() {
             {Kind::Value, kGyroCalibrateRow, "CALIBRATE GYRO"},
             {Kind::Heading, -1, "BUTTONS"},
         };
-        std::span<const input::Action> actions = input::PadActions();
-        for (size_t i = 0; i < actions.size(); i++) out.push_back({Kind::PadBind, int(i), actions[i].label});
+        AddBindRows(out, input::PadActions(), Kind::PadBind);
         return out;
     }();
     return list;

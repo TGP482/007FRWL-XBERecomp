@@ -768,6 +768,8 @@ bool LeftButton() { return Active() && !g_settle && Down(VK_LBUTTON); }
 
 bool CursorShown() { return g_menu && g_keyboard && !Play(); }
 
+bool InPlay() { return Play(); }
+
 std::optional<Pointer> Cursor() {
     HWND hwnd = HWND(app::Window());
     POINT point;

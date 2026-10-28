@@ -63,6 +63,7 @@ bool InMenu();                 // a menu page takes the input, whichever device 
 bool KeyboardActive();         // keyboard or mouse used last, not a controller
 bool LeftButton();             // the left mouse button held in the game window
 bool CursorShown();            // in a menu with the keyboard or mouse used last
+bool InPlay();                 // the game runs, not paused or in a cutscene: it asked for the mouse a moment ago
 
 // the cursor over the shown frame, 0 to 1 across and down, and the buttons held now
 struct Pointer {
