@@ -901,15 +901,18 @@ bool SpaceAt(const std::string& text, size_t at) {
     return at >= text.size() || std::isspace(static_cast<unsigned char>(text[at]));
 }
 
-// the token's picture had room around it; the key is set apart by spaces
+// the token's picture had room around it; the key is set apart by spaces. Out of play A is Enter: a box that pauses
+// the game takes it, and in a vehicle no key of play presses A
 bool NameKeys(std::string& text) {
     bool menu = input::CursorShown();
+    bool paused = !input::InPlay();
     bool changed = false;
     for (size_t open = text.find('['); open != std::string::npos; open = text.find('[', open + 1)) {
         size_t close = text.find(']', open);
         if (close == std::string::npos) break;
         const Token* token = TokenNamed(text.substr(open + 1, close - open - 1));
-        std::string label = token ? Label(token->buttons, menu) : std::string();
+        bool enter = paused && token && token->buttons.first == kA;
+        std::string label = token ? Label(token->buttons, menu || enter) : std::string();
         if (label.empty() && token && !menu && token->play >= 0) label = Label({token->play}, false);
         if (label.empty()) continue;
         std::string before = open == 0 || SpaceAt(text, open - 1) ? "" : " ";
