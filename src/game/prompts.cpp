@@ -24,6 +24,7 @@
 #include "xdk/hle.h"
 
 bool MenuItemsShown();  // menu_cursor.cpp
+bool MenuPageNow();     // menu_cursor.cpp
 
 using namespace kernel;
 using namespace flash;
@@ -210,6 +211,12 @@ bool KeyboardPrompts() {
     if (g_drawn_ports) return TakesKeyboard(*g_drawn_ports);
     return g_hud_port < 0 || g_hud_port == input::KeyboardPort();
 }
+
+constexpr uint32_t kGameMode = 0x826E20;
+constexpr uint32_t kModeRunning = 2;
+
+// menu keys on a menu page, and between pages out of play
+bool MenuLabels() { return MenuPageNow() || (input::InMenu() && R32(kGameMode) != kModeRunning); }
 
 std::string PauseKey() {
     std::string name = input::ButtonKey(kStart);
@@ -882,7 +889,7 @@ void UpdateLegends(X86Context& ctx) {
 bool LeadWithKey(std::string& text) {
     for (const LegendText& legend : g_legends.texts) {
         if (legend.text != text) continue;
-        std::string label = Label(legend.buttons, !legend.play || input::CursorShown());
+        std::string label = Label(legend.buttons, !legend.play || MenuLabels());
         if (label.empty()) return false;
         text = label + " " + text;
         return true;
@@ -901,24 +908,51 @@ bool SpaceAt(const std::string& text, size_t at) {
     return at >= text.size() || std::isspace(static_cast<unsigned char>(text[at]));
 }
 
-// the token's picture had room around it; the key is set apart by spaces. Out of play A is Enter: a box that pauses
-// the game takes it, and in a vehicle no key of play presses A
+// the tutorial box at HUD + 0xA00: header, text and continue prompt in one string joined by a written "\n\n"
+constexpr uint32_t kHud = 0x77F4B4;
+constexpr uint32_t kBoxText = 0xA08;
+constexpr uint32_t kBoxState = 0xA1C;  // 2 or 3 while shown
+constexpr uint32_t kBoxShown = 2;
+constexpr std::string_view kBoxBreak = "\\n\\n";
+
+// the shown box's continue prompt, after its last break
+std::string BoxContinue() {
+    uint32_t hud = R32(kHud);
+    uint32_t text = hud ? R32(hud + kBoxText) : 0;
+    if (!hud || R32(hud + kBoxState) < kBoxShown || !Readable(text)) return {};
+    std::string_view box(Text(text), strnlen(Text(text), kMaxText));
+    size_t at = box.rfind(kBoxBreak);
+    return at == std::string_view::npos ? std::string() : std::string(box.substr(at + kBoxBreak.size()));
+}
+
+// the interact key closes the box, whatever vehicle play is in
+std::string InteractLabel() {
+    std::string keys = input::Binding(size_t(input::ActionIndex("interact")));
+    keys = keys.substr(0, keys.find(','));
+    return keys.empty() ? keys : "(" + keys + ")";
+}
+
+// the token's picture had room around it; the key is set apart by spaces
 bool NameKeys(std::string& text) {
-    bool menu = input::CursorShown();
-    bool paused = !input::InPlay();
+    bool menu = MenuLabels();
+    std::string prompt = BoxContinue();
+    size_t prompt_at = prompt.empty() ? std::string::npos : text.rfind(prompt);
     bool changed = false;
     for (size_t open = text.find('['); open != std::string::npos; open = text.find('[', open + 1)) {
         size_t close = text.find(']', open);
         if (close == std::string::npos) break;
         const Token* token = TokenNamed(text.substr(open + 1, close - open - 1));
-        bool enter = paused && token && token->buttons.first == kA;
-        std::string label = token ? Label(token->buttons, menu || enter) : std::string();
-        if (label.empty() && token && !menu && token->play >= 0) label = Label({token->play}, false);
+        if (!token) continue;
+        std::string label = Label(token->buttons, menu);
+        if (label.empty() && !menu && token->play >= 0) label = Label({token->play}, false);
+        if (open >= prompt_at) label = InteractLabel();
         if (label.empty()) continue;
         std::string before = open == 0 || SpaceAt(text, open - 1) ? "" : " ";
         std::string after = SpaceAt(text, close + 1) ? "" : " ";
         std::string named = before + label + after;
-        text.replace(open, close - open + 1, named);
+        size_t replaced = close - open + 1;
+        text.replace(open, replaced, named);
+        if (open < prompt_at && prompt_at != std::string::npos) prompt_at = prompt_at + named.size() - replaced;
         open += named.size() - 1;
         changed = true;
     }
@@ -954,7 +988,7 @@ bool ReplaceAll(std::string& text, const Swap* swaps, size_t count) {
 // START is the menus' Enter and play's pause key
 bool NameStart(std::string& text) {
     bool changed = ReplaceAll(text, kKeyboardWording, std::size(kKeyboardWording));
-    std::string label = input::CursorShown() ? "(ENTER)" : Label({kStart}, false);
+    std::string label = MenuLabels() ? "(ENTER)" : Label({kStart}, false);
     if (!label.empty()) changed |= Replace(text, kStartWord, label);
     return changed;
 }
@@ -999,13 +1033,6 @@ void FitRect(uint32_t rect, float width, uint32_t align) {
 // a page of items over the case, its pause page, takes the menu cursor
 bool CaseShown() { return !g_case.keys.empty() && !MenuItemsShown(); }
 
-// before the Flash render, 0x412F1F
-void HideCasePictures(X86Context& ctx, uint8_t*) {
-    X86Context saved = ctx;
-    UpdateCaseKeys(ctx);
-    ctx = saved;
-}
-
 // the Flash menus are drawn, 0x412F24: the pictures back
 void DrawCaseKeys(X86Context& ctx, uint8_t*) { ShowCasePictures(); }
 
@@ -1048,11 +1075,12 @@ void SetPromptField(uint32_t field) {
 // an Apt clip is drawn, thiscall on the clip
 void LatchDrawnClip(X86Context& ctx, uint8_t*) { g_drawn_clip = ctx.ecx; }
 
-// frame tick, after the pads are read
+// before the Flash render, 0x412F1F: the pages as they will be drawn, not as the last tick left them
 void MenuPrompts(X86Context& ctx, uint8_t*) {
     X86Context saved = ctx;
     UpdateMenuPorts();
     UpdateLegends(ctx);
+    UpdateCaseKeys(ctx);
     ctx = saved;
 }
 

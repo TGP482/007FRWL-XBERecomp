@@ -213,6 +213,9 @@ uint32_t MenuScreen() {
     return 0;
 }
 
+// the page taking the input, none under the attache case or a film
+uint32_t PageScreen() { return CaseShown() || FilmShown() ? 0 : MenuScreen(); }
+
 bool TakesInput(uint32_t screen) {
     return !R32(screen + kScreenBlocked) && !R32(screen + kScreenListener + kListenerHeld);
 }
@@ -731,7 +734,7 @@ void UpdateMenu(uint32_t screen) {
 
 void UpdateCursor(X86Context& ctx) {
     // the attache case takes the bound keys and mouse buttons as play does; a film covers the page behind it
-    uint32_t screen = CaseShown() || FilmShown() ? 0 : MenuScreen();
+    uint32_t screen = PageScreen();
     g_page_shown = screen != 0;
     UpdateMenu(screen);
     bool row = screen && R32(screen + kScreenRows) == 1 && R32(screen + kScreenColumns) > 1;
@@ -768,6 +771,9 @@ std::vector<MenuPorts> ActiveMenuPorts() {
 }
 
 bool MenuPageShown() { return g_page_shown; }
+
+// as the game is now, not as the last tick saw it
+bool MenuPageNow() { return PageScreen() != 0; }
 
 // a menu page with a grid of items takes the input; a page whose script takes the codes itself has none
 bool MenuItemsShown() {

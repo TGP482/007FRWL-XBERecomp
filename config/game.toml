@@ -400,9 +400,10 @@ call = "HudWidgetEnd"
 at = 0x412F1F
 call = "MenuDrawBegin"
 
+# the same place: the menus' button legends and the attache case show the keys on keyboard and mouse
 [[hook]]
 at = 0x412F1F
-call = "HideCasePictures"
+call = "MenuPrompts"
 
 # Flash menus drawn, still in their 2D pass: the attache case's keys in place of its button pictures
 [[hook]]
@@ -440,11 +441,6 @@ call = "MenuCursor"
 [[hook]]
 at = 0x411152
 call = "MenuCursorFocus"
-
-# frame tick, after the pads are read: the menus' button legends show the keys on keyboard and mouse
-[[hook]]
-at = 0x224BE2
-call = "MenuPrompts"
 
 # a view's UI widget walk: on split screen the prompts follow whether that player is on the keyboard's port
 [[hook]]
