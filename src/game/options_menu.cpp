@@ -66,6 +66,7 @@ constexpr uint32_t kFieldRight = 0x0C;
 constexpr uint32_t kFieldBottom = 0x10;
 constexpr uint32_t kFieldAlign = 0x14;   // 0 left, 1 right, 2 centred
 constexpr uint32_t kFieldColour = 0x2C;  // ARGB
+constexpr uint32_t kFieldTextHeight = 0x48;  // float, the glyph size; the matrix scales only the box
 constexpr uint32_t kFieldRaw = 0x54;     // the text as the movie sets it, "$ID" for a string table entry
 constexpr uint32_t kFieldShown = 0x74;   // the text drawn when set
 constexpr uint32_t kFieldBytes = 0x7C;
@@ -134,6 +135,7 @@ constexpr float kWiden = 3.0f;    // a copy's box grows by this many of its widt
 // a page row: its name and value span the options panel's column, in screen pixels, at a smaller text
 constexpr float kColumnHalf = 160.0f;
 constexpr float kPageTextScale = 0.7f;
+constexpr float kPageGlyphScale = 0.88f;  // a long name and value keep apart
 constexpr int kStageWidth = 640;  // the screen the Flash stage is drawn across
 constexpr int kStageHeight = 480;
 constexpr uint32_t kStageWidthNow = 0x7626E8;  // float: the stage's own size
@@ -894,6 +896,7 @@ void DrawLineSide(X86Context& ctx, uint32_t field, const Field& seen, const std:
     G<float>(data + kFieldLeft) = middle_x - half;
     G<float>(data + kFieldRight) = middle_x + half;
     W32(data + kFieldAlign, align);
+    G<float>(data + kFieldTextHeight) *= kPageGlyphScale;
     float kept = 1.0f - kPageTextScale;
     float line_dy = LineY(slot) - g_layout.row[size_t(seen.row)].y;
     Place by{middle_x * scale_x * kept, line_dy + middle_y * scale_y * kept};
