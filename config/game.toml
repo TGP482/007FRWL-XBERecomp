@@ -427,6 +427,11 @@ call = "BoatPitchKick"
 at = 0x20C3B7
 call = "BoatKicked"
 
+# bullet tracers keep their console streak length
+[[hook]]
+at = 0x235A15
+call = "TracerTail"
+
 # Flash menus' tick, the frame time in whole milliseconds: the fraction is carried
 [[hook]]
 at = 0x411183

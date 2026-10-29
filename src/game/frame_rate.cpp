@@ -70,6 +70,10 @@ constexpr uint32_t kWorldContactTau = 0x16C;
 constexpr uint32_t kStepInfo = 4;                    // from esp: seconds, then 1 / seconds
 constexpr float kConsoleStepSeconds = 1.0f / 60.0f;  // the world steps twice a frame (0x2101B0), at 30 fps 1/60 s
 
+// bullet tracer update 0x2359E0: the streak's tail trails its head by the step, so it shrank at high frame rates
+constexpr float kConsoleTracerSeconds = 1.0f / 30.0f;
+constexpr int kTracerStepReg = 1;  // xmm
+
 // helicopter brain: its helicopter, 0x20 into the object, whose weapons answer at object +0x1F8
 constexpr uint32_t kBrainHelicopter = 0x4C;
 constexpr uint32_t kHelicopterWeapons = 0x1F8 - 0x20;
@@ -159,6 +163,12 @@ void BoatPitchKick(X86Context& ctx, uint8_t*) {
 void BoatKicked(X86Context& ctx, uint8_t*) {
     float& pitch = kernel::G<float>(ctx.ebx + kBoatPitch);
     pitch = g_boat.pitch + (pitch - g_boat.pitch) * FrameShare();
+}
+
+// before the tail's step comes off the age, 0x235A15: at least a console frame of the tracer's flight
+void TracerTail(X86Context& ctx, uint8_t*) {
+    float& step = ctx.xmm[kTracerStepReg].f[0];
+    step = std::max(step, kConsoleTracerSeconds * kernel::G<float>(kTimeScale));
 }
 
 // hkWorld simulate, thiscall(world, step)
